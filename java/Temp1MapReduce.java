@@ -188,6 +188,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         private int idxStreet;
         private int idxBoro;
         private int idxInspectionDate;
+        private int idxBbl;
         private int maxIdx;
 
         @Override
@@ -201,7 +202,8 @@ public class Temp1MapReduce extends Configured implements Tool {
             idxStreet = conf.getInt("dohmh.idx.street", 4);
             idxBoro = conf.getInt("dohmh.idx.boro", 2);
             idxInspectionDate = conf.getInt("dohmh.idx.inspection_date", 8);
-            maxIdx = max(idxZip, idxCamis, idxScore, idxCuisine, idxBuilding, idxStreet, idxBoro, idxInspectionDate);
+            idxBbl = conf.getInt("dohmh.idx.bbl", 24);
+            maxIdx = max(idxZip, idxCamis, idxScore, idxCuisine, idxBuilding, idxStreet, idxBoro, idxInspectionDate, idxBbl);
         }
 
         @Override
@@ -231,6 +233,7 @@ public class Temp1MapReduce extends Configured implements Tool {
             String building = clean(get(f, idxBuilding));
             String street = clean(get(f, idxStreet));
             String boro = clean(get(f, idxBoro));
+            String bbl = normalizeBbl(clean(get(f, idxBbl)));
 
             // Required preparation filter.
             if (isBlank(zip) || isBlank(camis) || isBlank(scoreRaw) || isBlank(building) || isBlank(street) || isBlank(boro)) {
@@ -258,7 +261,8 @@ public class Temp1MapReduce extends Configured implements Tool {
                     upper(cuisine),
                     addressDisplay,
                     boroUpper,
-                    normalizedAddress
+                    normalizedAddress,
+                    bbl
             };
             context.write(NullWritable.get(), new Text(joinUS(out)));
         }
@@ -345,6 +349,8 @@ public class Temp1MapReduce extends Configured implements Tool {
     /** Step 3 mapper: normalize PLUTO address and emit land use/year built candidates. */
     public static class PlutoMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxAddress;
+        private int idxPostcode;
+        private int idxBbl;
         private int idxLanduse;
         private int idxYearbuilt;
         private int maxIdx;
@@ -355,9 +361,11 @@ public class Temp1MapReduce extends Configured implements Tool {
         protected void setup(Context context) {
             Configuration conf = context.getConfiguration();
             idxAddress = conf.getInt("pluto.idx.address", 16);
+            idxPostcode = conf.getInt("pluto.idx.postcode", 8);
+            idxBbl = conf.getInt("pluto.idx.bbl", 68);
             idxLanduse = conf.getInt("pluto.idx.landuse", 33);
             idxYearbuilt = conf.getInt("pluto.idx.yearbuilt", 75);
-            maxIdx = max(idxAddress, idxLanduse, idxYearbuilt);
+            maxIdx = max(idxAddress, idxPostcode, idxBbl, idxLanduse, idxYearbuilt);
         }
 
         @Override
@@ -383,11 +391,22 @@ public class Temp1MapReduce extends Configured implements Tool {
                 return;
             }
 
+            String zip = firstFiveDigits(clean(get(f, idxPostcode)));
+            String bbl = normalizeBbl(clean(get(f, idxBbl)));
             String landuse = clean(get(f, idxLanduse));
             String yearbuilt = onlyDigits(clean(get(f, idxYearbuilt)));
-            outKey.set(normalizedAddress);
             outValue.set(key.get() + "|" + safePipe(landuse) + "|" + safePipe(yearbuilt));
-            context.write(outKey, outValue);
+
+            // Emit high-confidence BBL key and ZIP+address fallback key.
+            // This lets DOHMH rows with BBL join by parcel, while rows without BBL can still join by address.
+            if (!isBlank(bbl)) {
+                outKey.set("B|" + bbl);
+                context.write(outKey, outValue);
+            }
+            if (!isBlank(zip)) {
+                outKey.set("A|" + zip + "|" + normalizedAddress);
+                context.write(outKey, outValue);
+            }
         }
     }
 
@@ -427,11 +446,17 @@ public class Temp1MapReduce extends Configured implements Tool {
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String[] f = splitUS(value.toString());
-            if (f.length < 7) {
+            if (f.length < 8) {
                 return;
             }
+            String zip = f[0];
             String normalizedAddress = f[6];
-            context.write(new Text(normalizedAddress), new Text("D" + US + value.toString()));
+            String bbl = f[7];
+            String joinKey = makeJoinKey(zip, bbl, normalizedAddress);
+            if (isBlank(joinKey)) {
+                return;
+            }
+            context.write(new Text(joinKey), new Text("D" + US + value.toString()));
         }
     }
 
@@ -484,7 +509,7 @@ public class Temp1MapReduce extends Configured implements Tool {
                         yearbuilt = p[2];
                     }
                 } else if ("D".equals(p[0])) {
-                    // D + 7 cleaned columns
+                    // D + 8 cleaned columns; output uses the first 6 public columns plus normalized address internally
                     if (p.length >= 8) {
                         String[] row = new String[] { p[1], p[2], p[3], p[4], p[5], p[6], p[7] };
                         rows.add(row);
@@ -585,12 +610,15 @@ public class Temp1MapReduce extends Configured implements Tool {
         conf.setInt("dohmh.idx.cuisine", firstExisting(h, 7, "CUISINE DESCRIPTION", "CUISINE_DESCRIPTION"));
         conf.setInt("dohmh.idx.inspection_date", firstExisting(h, 8, "INSPECTION DATE", "INSPECTION_DATE"));
         conf.setInt("dohmh.idx.score", firstExisting(h, 13, "SCORE"));
+        conf.setInt("dohmh.idx.bbl", firstExisting(h, 24, "BBL"));
     }
 
     private static void setPlutoColumns(Configuration conf, Map<String, Integer> h) {
-        conf.setInt("pluto.idx.address", firstExisting(h, 16, "ADDRESS"));
-        conf.setInt("pluto.idx.landuse", firstExisting(h, 33, "LANDUSE", "LAND USE"));
-        conf.setInt("pluto.idx.yearbuilt", firstExisting(h, 75, "YEARBUILT", "YEAR BUILT"));
+        conf.setInt("pluto.idx.address", firstExisting(h, 14, "ADDRESS"));
+        conf.setInt("pluto.idx.postcode", firstExisting(h, 8, "POSTCODE", "ZIPCODE", "ZIP CODE"));
+        conf.setInt("pluto.idx.bbl", firstExisting(h, 68, "BBL"));
+        conf.setInt("pluto.idx.landuse", firstExisting(h, 27, "LANDUSE", "LAND USE"));
+        conf.setInt("pluto.idx.yearbuilt", firstExisting(h, 58, "YEARBUILT", "YEAR BUILT"));
     }
 
     private static Map<String, Integer> readHeaderIndex(Configuration conf, Path inputPath) throws IOException {
@@ -721,6 +749,62 @@ public class Temp1MapReduce extends Configured implements Tool {
         return out.toString();
     }
 
+    private static String firstFiveDigits(String s) {
+        String d = onlyDigits(s);
+        return d.length() >= 5 ? d.substring(0, 5) : d;
+    }
+
+    private static String normalizeBbl(String s) {
+        String d = onlyDigits(s);
+        if (d.length() != 10) {
+            return "";
+        }
+
+        boolean allZero = true;
+        for (int i = 0; i < d.length(); i++) {
+            if (d.charAt(i) != '0') {
+                allZero = false;
+                break;
+            }
+        }
+        if (allZero) {
+            return "";
+        }
+
+        // Values like 1000000000 are placeholders, not real parcel BBLs.
+        boolean missingBlockAndLot = true;
+        for (int i = 1; i < d.length(); i++) {
+            if (d.charAt(i) != '0') {
+                missingBlockAndLot = false;
+                break;
+            }
+        }
+        return missingBlockAndLot ? "" : d;
+    }
+
+    private static String makeJoinKey(String zip, String bbl, String normalizedAddress) {
+        String cleanBbl = normalizeBbl(bbl);
+        if (!isBlank(cleanBbl)) {
+            return "B|" + cleanBbl;
+        }
+
+        String cleanZip = firstFiveDigits(zip);
+        if (isBlank(cleanZip) || isBlank(normalizedAddress)) {
+            return "";
+        }
+        return "A|" + cleanZip + "|" + normalizedAddress;
+    }
+
+    private static String stripOrdinalSuffix(String t) {
+        if (t == null) {
+            return "";
+        }
+        if (t.matches("[0-9]+(ST|ND|RD|TH)")) {
+            return t.replaceAll("(ST|ND|RD|TH)$", "");
+        }
+        return t;
+    }
+
     private static String normalizeAddress(String address) {
         String x = upper(address);
         x = x.replace('.', ' ');
@@ -739,12 +823,13 @@ public class Temp1MapReduce extends Configured implements Tool {
             if (t.length() == 0) {
                 continue;
             }
-            out.add(abbreviateAddressToken(t));
+            out.add(abbreviateAddressToken(stripOrdinalSuffix(t)));
         }
         return joinWithSpace(out);
     }
 
     private static String abbreviateAddressToken(String t) {
+        if ("SAINT".equals(t)) return "ST";
         if ("STREET".equals(t) || "STR".equals(t)) return "ST";
         if ("AVENUE".equals(t) || "AV".equals(t)) return "AVE";
         if ("ROAD".equals(t)) return "RD";
