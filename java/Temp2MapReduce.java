@@ -164,11 +164,12 @@ public class Temp2MapReduce extends Configured implements Tool {
         return 0;
     }
 
-    /** Step 1 mapper: extract unique ZIP and BORO/ZIP statistic candidates from TEMP1. */
+    /** Step 1 mapper: extract unique ZIP statistics and BORO statistics from TEMP1. */
     public static class Temp1StatsMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxZip;
         private int idxBoro;
         private int idxNumberPerZip;
+        private int idxNumberPerBoro;
         private int idxAvgScoreZip;
         private int maxIdx;
         private final Text outKey = new Text();
@@ -180,8 +181,9 @@ public class Temp2MapReduce extends Configured implements Tool {
             idxZip = conf.getInt("temp1.idx.zipcode", 0);
             idxBoro = conf.getInt("temp1.idx.boro", 5);
             idxNumberPerZip = conf.getInt("temp1.idx.number_per_zip", 6);
+            idxNumberPerBoro = conf.getInt("temp1.idx.number_per_boro", 7);
             idxAvgScoreZip = conf.getInt("temp1.idx.avg_score_zip", 8);
-            maxIdx = max(idxZip, idxBoro, idxNumberPerZip, idxAvgScoreZip);
+            maxIdx = max(idxZip, idxBoro, idxNumberPerZip, idxNumberPerBoro, idxAvgScoreZip);
         }
 
         @Override
@@ -201,23 +203,24 @@ public class Temp2MapReduce extends Configured implements Tool {
             String zip = firstFiveDigits(clean(get(f, idxZip)));
             String boro = upper(get(f, idxBoro));
             String numberPerZip = clean(get(f, idxNumberPerZip));
+            String numberPerBoro = clean(get(f, idxNumberPerBoro));
             String avgScoreZip = clean(get(f, idxAvgScoreZip));
 
-            if (isBlank(zip) || isBlank(boro) || parseDouble(numberPerZip) == null) {
-                return;
+            if (!isBlank(zip) && parseDouble(numberPerZip) != null) {
+                outKey.set("ZIP|" + zip);
+                outValue.set(safePipe(numberPerZip) + "|" + safePipe(avgScoreZip));
+                context.write(outKey, outValue);
             }
 
-            outKey.set("ZIP|" + zip);
-            outValue.set(safePipe(numberPerZip) + "|" + safePipe(avgScoreZip));
-            context.write(outKey, outValue);
-
-            outKey.set("BOROZIP|" + boro + "|" + zip);
-            outValue.set(safePipe(numberPerZip));
-            context.write(outKey, outValue);
+            if (!isBlank(boro) && parseDouble(numberPerBoro) != null) {
+                outKey.set("BORO|" + boro);
+                outValue.set(safePipe(numberPerBoro));
+                context.write(outKey, outValue);
+            }
         }
     }
 
-    /** Step 1 reducer: one record per ZIP and one record per BORO+ZIP. */
+    /** Step 1 reducer: one record per ZIP and one record per BORO. */
     public static class Temp1StatsReducer extends Reducer<Text, Text, Text, Text> {
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
@@ -238,16 +241,16 @@ public class Temp2MapReduce extends Configured implements Tool {
                     }
                 }
                 context.write(key, new Text(numberPerZip + "|" + avgScoreZip));
-            } else if (k.startsWith("BOROZIP|")) {
-                String numberPerZip = "";
+            } else if (k.startsWith("BORO|")) {
+                String numberPerBoro = "";
                 for (Text v : values) {
                     String candidate = v.toString();
                     if (parseDouble(candidate) != null) {
-                        numberPerZip = candidate;
+                        numberPerBoro = candidate;
                         break;
                     }
                 }
-                context.write(key, new Text(numberPerZip));
+                context.write(key, new Text(numberPerBoro));
             }
         }
     }
@@ -408,7 +411,7 @@ public class Temp2MapReduce extends Configured implements Tool {
     public static class FinalReducer extends Reducer<Text, Text, NullWritable, Text> {
         private final Map<String, Double> zipNumberPerZip = new HashMap<String, Double>();
         private final Map<String, Double> zipAvgScore = new HashMap<String, Double>();
-        private final Map<String, Double> boroStdevPerBoro = new HashMap<String, Double>();
+        private double stdevPerBoro = 0.0;
         private final Map<String, Integer> crimeCountByZip = new HashMap<String, Integer>();
         private final Map<String, String> dominantCrimeByZip = new HashMap<String, String>();
 
@@ -457,7 +460,7 @@ public class Temp2MapReduce extends Configured implements Tool {
                 String yearbuilt = r[11];
 
                 String stdevPerZipOut = formatDouble(stdevPerZip);
-                String stdevPerBoroOut = formatNullableDouble(boroStdevPerBoro.get(boro));
+                String stdevPerBoroOut = formatDouble(stdevPerBoro);
                 String densityQualityIndex = calculateRestaurantDensityQualityIndex(numberPerZip, avgScoreZip);
                 String buildingAge = calculateBuildingAge(yearbuilt, currentYear);
                 String crimeInspectionRisk = calculateCrimeInspectionRisk(rowZip, avgScoreZip);
@@ -494,7 +497,7 @@ public class Temp2MapReduce extends Configured implements Tool {
                 throw new IOException("Missing temp2.temp1.stats.path configuration");
             }
 
-            Map<String, List<Double>> boroNumberPerZipValues = new HashMap<String, List<Double>>();
+            Map<String, Double> boroNumberPerBoro = new HashMap<String, Double>();
             FileSystem fs = FileSystem.get(conf);
             FileStatus[] files = fs.listStatus(new Path(statsPath));
             for (FileStatus st : files) {
@@ -524,21 +527,11 @@ public class Temp2MapReduce extends Configured implements Tool {
                             if (avgScoreZip != null) {
                                 zipAvgScore.put(zip, avgScoreZip);
                             }
-                        } else if (k.startsWith("BOROZIP|")) {
-                            String rest = k.substring("BOROZIP|".length());
-                            int split = rest.indexOf('|');
-                            if (split < 0) {
-                                continue;
-                            }
-                            String boro = rest.substring(0, split);
-                            Double numberPerZip = parseDouble(val);
-                            if (numberPerZip != null) {
-                                List<Double> list = boroNumberPerZipValues.get(boro);
-                                if (list == null) {
-                                    list = new ArrayList<Double>();
-                                    boroNumberPerZipValues.put(boro, list);
-                                }
-                                list.add(numberPerZip);
+                        } else if (k.startsWith("BORO|")) {
+                            String boro = k.substring("BORO|".length());
+                            Double numberPerBoro = parseDouble(val);
+                            if (!isBlank(boro) && numberPerBoro != null) {
+                                boroNumberPerBoro.put(boro, numberPerBoro);
                             }
                         }
                     }
@@ -547,9 +540,7 @@ public class Temp2MapReduce extends Configured implements Tool {
                 }
             }
 
-            for (Map.Entry<String, List<Double>> e : boroNumberPerZipValues.entrySet()) {
-                boroStdevPerBoro.put(e.getKey(), populationStdev(e.getValue()));
-            }
+            stdevPerBoro = populationStdev(new ArrayList<Double>(boroNumberPerBoro.values()));
         }
 
         private void loadCrimeStats(Configuration conf) throws IOException {
