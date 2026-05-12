@@ -28,30 +28,36 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-/**
- * TEMP3 MapReduce for the NYC restaurant project.
- *
- * Input:
- *   /datasets/results/temp2_latest.csv
- *
- * Output files:
- *   /datasets/results/temp3_yyyyMMdd_HHmmss.csv
- *   /datasets/results/temp3_latest.csv
- *
- * Hadoop: 3.3.5
- * Java:   8
- * External libraries: none
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public class Temp3MapReduce extends Configured implements Tool {
 
-    private static final String US = "\u001F"; // unit separator used internally
+    private static final String US = "\u001F"; 
     private static final String HEADER = "CAMIS,BORO,ZIPCODE,ADDRESS,CUISINE_DESCRIPTION,YEARBUILT,LANDUSE,CRIME_INSPECTION_RISK_SCORE,BUILDING_AGE_SCORE,RESTAURANT_DENSITY_QUALITY_INDEX,CUISINE_RELATIVE_SCORE,DOMINANT_CRIME_TYPE";
 
+    // Punkt wejścia programu uruchamianego przez yarn jar.
+    // Wejście: argumenty CLI przekazane do klasy MapReduce.
+    // Wyjście: kod zakończenia procesu zwrócony przez ToolRunner.
     public static void main(String[] args) throws Exception {
         int exitCode = ToolRunner.run(new Configuration(), new Temp3MapReduce(), args);
         System.exit(exitCode);
     }
 
+    // Steruje pełnym przebiegiem etapu MapReduce: odczytuje argumenty, konfiguruje zadania Hadoop, uruchamia je w kolejności oraz zapisuje pliki wynikowe.
+    // Wejście: ścieżki HDFS przekazane w argumentach lub wartości domyślne zapisane w kodzie.
+    // Wyjście: plik CSV z timestampem, plik _latest.csv oraz kod statusu 0/1/2/... zależny od powodzenia poszczególnych jobów.
     @Override
     public int run(String[] args) throws Exception {
         String temp2Input = args.length > 0 ? args[0] : "/datasets/results/temp2_latest.csv";
@@ -105,7 +111,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         finalJob.setOutputKeyClass(NullWritable.class);
         finalJob.setOutputValueClass(Text.class);
         finalJob.setOutputFormatClass(TextOutputFormat.class);
-        finalJob.setNumReduceTasks(1); // one output part, one header
+        finalJob.setNumReduceTasks(1); 
         FileInputFormat.addInputPath(finalJob, new Path(temp2Input));
         FileOutputFormat.setOutputPath(finalJob, finalOut);
         if (!finalJob.waitForCompletion(true)) {
@@ -137,7 +143,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         return 0;
     }
 
-    /** Step 1 mapper: emit values needed for score and crime standard deviations. */
+    
     public static class StatsMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxZip;
         private int idxScore;
@@ -148,6 +154,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         private final Text outKey = new Text();
         private final Text outValue = new Text();
 
+        // Pobiera indeksy kolumn TEMP2 potrzebne do policzenia odchyleń score i crime.
         @Override
         protected void setup(Context context) {
             Configuration conf = context.getConfiguration();
@@ -159,6 +166,9 @@ public class Temp3MapReduce extends Configured implements Tool {
             maxIdx = max(idxZip, idxScore, idxCuisine, idxBoro, idxCountCrimePerZip);
         }
 
+        // Tworzy rekordy pomocnicze do policzenia STDEV_SCORE_ZIP, STDEV_SCORE_BORO_CD oraz crime count per ZIP.
+        // Wejście: wiersz temp2_latest.csv.
+        // Wyjście: pary ZIP_SCORE|ZIP, BOROCD_SCORE|BORO|CUISINE oraz ZIP_CRIME|ZIP.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -201,8 +211,9 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 1 reducer: calculate population STDEV(SCORE) and keep one crime count per ZIP. */
+    
     public static class StatsReducer extends Reducer<Text, Text, Text, Text> {
+        // Liczy populacyjne odchylenia standardowe SCORE dla ZIP i BORO+CUISINE oraz zapisuje jedną wartość crime count dla ZIP.
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             String k = key.toString();
@@ -230,8 +241,9 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 2 mapper: pass TEMP2 rows to one reducer. */
+    
     public static class FinalMapper extends Mapper<LongWritable, Text, Text, Text> {
+        // Przekazuje wszystkie wiersze TEMP2 do jednego reducera, aby finalny plik miał jeden nagłówek i jeden part-file.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -246,7 +258,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 2 reducer: calculate final columns and preserve one output row per TEMP2 input row. */
+    
     public static class FinalReducer extends Reducer<Text, Text, NullWritable, Text> {
         private final Map<String, Double> stdevScoreByZip = new HashMap<String, Double>();
         private final Map<String, Double> stdevScoreByBoroCuisine = new HashMap<String, Double>();
@@ -271,6 +283,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         private int idxDominantCrimeType;
         private int maxIdx;
 
+        // Pobiera indeksy kolumn TEMP2, ładuje statystyki z pierwszego joba i zapisuje nagłówek finalnego TEMP3.
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             Configuration conf = context.getConfiguration();
@@ -298,6 +311,9 @@ public class Temp3MapReduce extends Configured implements Tool {
             context.write(NullWritable.get(), new Text(HEADER));
         }
 
+        // Tworzy finalny, okrojony zbiór wynikowy TEMP3 z kolumnami analitycznymi i wybranymi kolumnami źródłowymi.
+        // Wejście: wszystkie wiersze TEMP2 przekazane pod kluczem ALL.
+        // Wyjście: finalne wiersze temp3 CSV, zwykle 1:1 względem wierszy TEMP2, o ile wiersz ma wymagane kolumny.
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             for (Text v : values) {
@@ -346,6 +362,7 @@ public class Temp3MapReduce extends Configured implements Tool {
             }
         }
 
+        // Wczytuje odchylenia standardowe SCORE oraz crime count per ZIP z wyniku joba statystycznego.
         private void loadStats(Configuration conf) throws IOException {
             String statsPath = conf.get("temp3.stats.path");
             if (statsPath == null) {
@@ -394,11 +411,13 @@ public class Temp3MapReduce extends Configured implements Tool {
             }
         }
 
+        // Liczy STDEV_CRIME_PER_ZIP z unikalnych wartości COUNT_CRIME_PER_ZIP po ZIP.
         private void calculateCrimeStdev() {
             List<Double> values = new ArrayList<Double>(crimeCountByZip.values());
             stdevCrimePerZip = populationStdev(values);
         }
 
+        // Liczy CRIME_INSPECTION_RISK_SCORE = NORM_SCORE_ZIP + NORM_CRIME_ZIP według finalnego wzoru projektu.
         private String calculateCrimeInspectionRiskScore(String zip, String scoreRaw, String avgScoreZipRaw,
                                                          String countCrimeRaw, String avgCrimeRaw) {
             Double score = parseDouble(scoreRaw);
@@ -421,6 +440,7 @@ public class Temp3MapReduce extends Configured implements Tool {
             return formatDouble(normScoreZip + normCrimeZip);
         }
 
+        // Liczy CUISINE_RELATIVE_SCORE jako z-score SCORE względem średniej i odchylenia grupy BORO+CUISINE.
         private String calculateCuisineRelativeScore(String boro, String cuisine, String scoreRaw, String avgScoreBoroCdRaw) {
             Double score = parseDouble(scoreRaw);
             Double avgScoreBoroCd = parseDouble(avgScoreBoroCdRaw);
@@ -433,11 +453,12 @@ public class Temp3MapReduce extends Configured implements Tool {
                 return formatDouble(0.0);
             }
 
-            // Standard z-score, consistent with NORM(value, mean, stdev) used in this pipeline.
+            
             return formatDouble((score.doubleValue() - avgScoreBoroCd.doubleValue()) / stdev.doubleValue());
         }
     }
 
+    // Zapisuje w konfiguracji indeksy kolumn TEMP2 używanych w finalnej transformacji.
     private static void setTemp2Columns(Configuration conf, Map<String, Integer> h) {
         conf.setInt("temp2.idx.zipcode", firstExisting(h, 0, "ZIPCODE", "ZIP CODE"));
         conf.setInt("temp2.idx.camis", firstExisting(h, 1, "CAMIS"));
@@ -456,6 +477,9 @@ public class Temp3MapReduce extends Configured implements Tool {
         conf.setInt("temp2.idx.dominant_crime_type", firstExisting(h, 18, "DOMINANT_CRIME_TYPE", "DOMINANT CRIME TYPE"));
     }
 
+    // Czyta pierwszy wiersz pliku CSV z HDFS i buduje mapę: kanoniczna nazwa kolumny -> indeks kolumny.
+    // Wejście: konfiguracja Hadoop oraz ścieżka HDFS do pliku CSV.
+    // Wyjście: mapa indeksów używana później do odpornego odczytu kolumn niezależnie od ich kolejności.
     private static Map<String, Integer> readHeaderIndex(Configuration conf, Path inputPath) throws IOException {
         FileSystem fs = inputPath.getFileSystem(conf);
         FSDataInputStream in = fs.open(inputPath);
@@ -476,6 +500,9 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
+    // Zwraca indeks pierwszej znalezionej kolumny spośród podanych możliwych nazw.
+    // Wejście: mapa nagłówków, indeks domyślny i lista akceptowanych nazw kolumn.
+    // Wyjście: indeks kolumny albo wartość domyślna, gdy kolumna nie została znaleziona.
     private static int firstExisting(Map<String, Integer> h, int defaultIndex, String... names) {
         for (String n : names) {
             Integer idx = h.get(canon(n));
@@ -486,6 +513,9 @@ public class Temp3MapReduce extends Configured implements Tool {
         return defaultIndex;
     }
 
+    // Wyszukuje pierwszy plik wynikowy part- w katalogu wyjściowym joba Hadoop.
+    // Wejście: FileSystem HDFS oraz katalog z wynikiem MapReduce.
+    // Wyjście: ścieżka do pliku part- lub null, jeżeli Hadoop nie utworzył pliku wynikowego.
     private static Path findFirstPartFile(FileSystem fs, Path dir) throws IOException {
         FileStatus[] statuses = fs.listStatus(dir);
         for (FileStatus st : statuses) {
@@ -496,6 +526,9 @@ public class Temp3MapReduce extends Configured implements Tool {
         return null;
     }
 
+    // Kopiuje plik w obrębie HDFS strumieniowo blokami bajtów.
+    // Wejście: FileSystem HDFS, ścieżka źródłowa i ścieżka docelowa.
+    // Wyjście: nowy plik docelowy, zwykle wersjonowany CSV albo plik _latest.csv.
     private static void copyHdfsFile(FileSystem fs, Path src, Path dst) throws IOException {
         FSDataInputStream in = fs.open(src);
         FSDataOutputStream out = fs.create(dst, true);
@@ -513,6 +546,9 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
+    // Parsuje pojedynczy wiersz CSV bez zewnętrznych bibliotek, z obsługą cudzysłowów, przecinków w polach i podwójnych cudzysłowów.
+    // Wejście: surowy wiersz tekstowy CSV.
+    // Wyjście: lista pól CSV w kolejności z pliku.
     private static List<String> parseCsvLine(String line) {
         List<String> result = new ArrayList<String>();
         StringBuilder cur = new StringBuilder();
@@ -537,6 +573,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         return result;
     }
 
+    // Sprawdza, czy sparsowany wiersz wygląda jak nagłówek CSV, porównując pierwszą kolumnę z oczekiwaną nazwą.
     private static boolean isCsvHeader(List<String> f, String expectedFirstColumn) {
         if (f == null || f.isEmpty()) {
             return false;
@@ -544,10 +581,12 @@ public class Temp3MapReduce extends Configured implements Tool {
         return canon(f.get(0)).equals(canon(expectedFirstColumn));
     }
 
+    // Bezpiecznie pobiera wartość pola z listy, zwracając pusty string, gdy indeks jest poza zakresem.
     private static String get(List<String> fields, int idx) {
         return idx >= 0 && idx < fields.size() ? fields.get(idx) : "";
     }
 
+    // Normalizuje podstawowo tekst: obsługuje null, usuwa białe znaki z końców i usuwa znak BOM.
     private static String clean(String s) {
         if (s == null) {
             return "";
@@ -555,14 +594,17 @@ public class Temp3MapReduce extends Configured implements Tool {
         return s.trim().replace('\uFEFF', ' ');
     }
 
+    // Zwraca oczyszczony tekst w uppercase z Locale.ROOT, aby nazwy były stabilne między systemami.
     private static String upper(String s) {
         return clean(s).toUpperCase(Locale.ROOT);
     }
 
+    // Sprawdza, czy wartość jest nullem albo pustym tekstem po trim().
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
     }
 
+    // Usuwa z tekstu wszystkie znaki poza cyframi, używane m.in. dla ZIP, BBL i roku budowy.
     private static String onlyDigits(String s) {
         if (s == null) {
             return "";
@@ -577,11 +619,13 @@ public class Temp3MapReduce extends Configured implements Tool {
         return out.toString();
     }
 
+    // Zwraca pierwsze pięć cyfr z tekstu, co standaryzuje ZIP/MODZCTA do postaci pięciocyfrowej.
     private static String firstFiveDigits(String s) {
         String d = onlyDigits(s);
         return d.length() >= 5 ? d.substring(0, 5) : d;
     }
 
+    // Buduje poprawny wiersz CSV z tablicy wartości, używając csvEscape dla pól wymagających cudzysłowów.
     private static String toCsv(String[] values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.length; i++) {
@@ -591,6 +635,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         return sb.toString();
     }
 
+    // Escapuje pojedynczą wartość CSV: dodaje cudzysłowy i podwaja cudzysłowy wewnątrz pola, jeśli jest to potrzebne.
     private static String csvEscape(String s) {
         if (s == null) {
             s = "";
@@ -602,11 +647,13 @@ public class Temp3MapReduce extends Configured implements Tool {
         return "\"" + s.replace("\"", "\"\"") + "\"";
     }
 
+    // Tworzy kanoniczną nazwę kolumny: uppercase, zamiana podkreśleń na spacje i redukcja wielu spacji.
     private static String canon(String s) {
         if (s == null) return "";
         return s.trim().toUpperCase(Locale.ROOT).replace('_', ' ').replaceAll("\\s+", " ");
     }
 
+    // Bezpiecznie konwertuje tekst na Double, zwracając null dla wartości pustych lub niepoprawnych.
     private static Double parseDouble(String s) {
         try {
             if (s == null || s.trim().isEmpty()) {
@@ -618,6 +665,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
+    // Liczy średnią arytmetyczną z listy wartości liczbowych; dla pustej listy zwraca 0.0.
     private static double mean(List<Double> values) {
         if (values == null || values.isEmpty()) {
             return 0.0;
@@ -633,6 +681,9 @@ public class Temp3MapReduce extends Configured implements Tool {
         return count == 0 ? 0.0 : sum / count;
     }
 
+    // Liczy populacyjne odchylenie standardowe, czyli sqrt(sum((x-mean)^2)/n).
+    // Wejście: lista wartości liczbowych traktowana jako pełna populacja danych dostępnych w projekcie.
+    // Wyjście: odchylenie standardowe populacyjne; dla pustej listy 0.0.
     private static double populationStdev(List<Double> values) {
         if (values == null || values.isEmpty()) {
             return 0.0;
@@ -650,10 +701,12 @@ public class Temp3MapReduce extends Configured implements Tool {
         return count == 0 ? 0.0 : Math.sqrt(sumSq / count);
     }
 
+    // Formatuje liczbę zmiennoprzecinkową do czterech miejsc po przecinku z separatorem kropki.
     private static String formatDouble(double v) {
         return String.format(Locale.US, "%.4f", v);
     }
 
+    // Formatuje liczbę bez zbędnych zer po przecinku, gdy jest całkowita; inaczej używa czterech miejsc po przecinku.
     private static String formatDoublePlain(double v) {
         if (Math.floor(v) == v) {
             return String.valueOf((long) v);
@@ -661,6 +714,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         return String.format(Locale.US, "%.10f", v);
     }
 
+    // Zwraca największą wartość z listy indeksów, aby szybko sprawdzić minimalną wymaganą długość wiersza.
     private static int max(int... values) {
         int m = Integer.MIN_VALUE;
         for (int v : values) {

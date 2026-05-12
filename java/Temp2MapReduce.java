@@ -31,31 +31,37 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-/**
- * TEMP2 MapReduce for the NYC restaurant project.
- *
- * Input:
- *   /datasets/results/temp1_latest.csv
- *   /datasets/results/nypd_zip_latest.csv
- *
- * Output files:
- *   /datasets/results/temp2_yyyyMMdd_HHmmss.csv
- *   /datasets/results/temp2_latest.csv
- *
- * Hadoop: 3.3.5
- * Java:   8
- * External libraries: none
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public class Temp2MapReduce extends Configured implements Tool {
 
-    private static final String US = "\u001F"; // unit separator used internally
+    private static final String US = "\u001F"; 
     private static final String HEADER = "ZIPCODE,CAMIS,SCORE,CUISINE_DESCRIPTION,ADDRESS,BORO,NUMBER_PER_ZIP,STDEV_PER_ZIP,NUMBER_PER_BORO,STDEV_PER_BORO,AVG_SCORE_ZIP,AVG_SCORE_BORO_CD,RESTAURANT_DENSITY_QUALITY_INDEX,LANDUSE,BUILDING_AGE,YEARBUILT,AVG_CRIME_PER_ZIP,COUNT_CRIME_PER_ZIP,DOMINANT_CRIME_TYPE,CRIME_INSPECTION_RISK_SCORE";
 
+    // Punkt wejścia programu uruchamianego przez yarn jar.
+    // Wejście: argumenty CLI przekazane do klasy MapReduce.
+    // Wyjście: kod zakończenia procesu zwrócony przez ToolRunner.
     public static void main(String[] args) throws Exception {
         int exitCode = ToolRunner.run(new Configuration(), new Temp2MapReduce(), args);
         System.exit(exitCode);
     }
 
+    // Steruje pełnym przebiegiem etapu MapReduce: odczytuje argumenty, konfiguruje zadania Hadoop, uruchamia je w kolejności oraz zapisuje pliki wynikowe.
+    // Wejście: ścieżki HDFS przekazane w argumentach lub wartości domyślne zapisane w kodzie.
+    // Wyjście: plik CSV z timestampem, plik _latest.csv oraz kod statusu 0/1/2/... zależny od powodzenia poszczególnych jobów.
     @Override
     public int run(String[] args) throws Exception {
         String temp1Input = args.length > 0 ? args[0] : "/datasets/results/temp1_latest.csv";
@@ -132,7 +138,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         finalJob.setOutputKeyClass(NullWritable.class);
         finalJob.setOutputValueClass(Text.class);
         finalJob.setOutputFormatClass(TextOutputFormat.class);
-        finalJob.setNumReduceTasks(1); // one output part, one header
+        finalJob.setNumReduceTasks(1); 
         FileInputFormat.addInputPath(finalJob, new Path(temp1Input));
         FileOutputFormat.setOutputPath(finalJob, finalOut);
         if (!finalJob.waitForCompletion(true)) {
@@ -164,7 +170,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         return 0;
     }
 
-    /** Step 1 mapper: extract unique ZIP statistics and BORO statistics from TEMP1. */
+    
     public static class Temp1StatsMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxZip;
         private int idxBoro;
@@ -175,6 +181,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         private final Text outKey = new Text();
         private final Text outValue = new Text();
 
+        // Pobiera indeksy kolumn TEMP1 potrzebne do policzenia statystyk ZIP i BORO.
         @Override
         protected void setup(Context context) {
             Configuration conf = context.getConfiguration();
@@ -186,6 +193,9 @@ public class Temp2MapReduce extends Configured implements Tool {
             maxIdx = max(idxZip, idxBoro, idxNumberPerZip, idxNumberPerBoro, idxAvgScoreZip);
         }
 
+        // Wyciąga z TEMP1 unikalne informacje o ZIP i BORO potrzebne do odchyleń standardowych oraz średnich.
+        // Wejście: wiersz temp1_latest.csv.
+        // Wyjście: rekordy ZIP|... z NUMBER_PER_ZIP/AVG_SCORE_ZIP oraz BORO|... z NUMBER_PER_BORO.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -220,8 +230,9 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 1 reducer: one record per ZIP and one record per BORO. */
+    
     public static class Temp1StatsReducer extends Reducer<Text, Text, Text, Text> {
+        // Redukuje powtarzające się rekordy TEMP1 do jednego rekordu statystycznego per ZIP albo per BORO.
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             String k = key.toString();
@@ -255,7 +266,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 2 mapper: emit one complaint/offense candidate by ZIP. */
+    
     public static class NypdCrimeMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxCmplntNum;
         private int idxZip;
@@ -264,6 +275,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         private final Text outKey = new Text();
         private final Text outValue = new Text();
 
+        // Pobiera indeksy kolumn wzbogaconego NYPD_ZIP: CMPLNT_NUM, ZIPCODE i OFNS_DESC.
         @Override
         protected void setup(Context context) {
             Configuration conf = context.getConfiguration();
@@ -273,6 +285,9 @@ public class Temp2MapReduce extends Configured implements Tool {
             maxIdx = max(idxCmplntNum, idxZip, idxOfnsDesc);
         }
 
+        // Mapuje pojedynczy rekord nypd_zip_latest.csv do ZIP-a, zachowując numer zgłoszenia i typ przestępstwa.
+        // Wejście: rekord NYPD po przypisaniu ZIP.
+        // Wyjście: para ZIP -> CMPLNT_NUM|OFNS_DESC; puste ZIP/CMPLNT_NUM/OFNS_DESC są pomijane.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -301,8 +316,9 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 2 reducer: COUNT(DISTINCT CMPLNT_NUM) and MODE(OFNS_DESC) per ZIP. */
+    
     public static class NypdCrimeReducer extends Reducer<Text, Text, Text, Text> {
+        // Liczy COUNT(DISTINCT CMPLNT_NUM) i dominujący typ przestępstwa dla każdego ZIP, z rozstrzyganiem remisów alfabetycznie.
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             Set<String> distinctComplaints = new HashSet<String>();
@@ -330,7 +346,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 3 mapper: parse TEMP1 rows and key them by ZIP. */
+    
     public static class FinalTemp1Mapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxZip;
         private int idxCamis;
@@ -348,6 +364,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         private final Text outKey = new Text();
         private final Text outValue = new Text();
 
+        // Pobiera indeksy wszystkich kolumn TEMP1 wymaganych do budowy TEMP2.
         @Override
         protected void setup(Context context) {
             Configuration conf = context.getConfiguration();
@@ -367,6 +384,7 @@ public class Temp2MapReduce extends Configured implements Tool {
                     idxNumberPerBoro, idxAvgScoreZip, idxAvgScoreBoroCd, idxLanduse, idxYearbuilt);
         }
 
+        // Przepisuje rekord TEMP1 do wewnętrznego formatu i kluczuje go ZIP-em, aby reducer mógł dopisać statystyki crime.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -407,7 +425,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 3 reducer: enrich each TEMP1 row with TEMP2 metrics and preserve 1:1 row cardinality. */
+    
     public static class FinalReducer extends Reducer<Text, Text, NullWritable, Text> {
         private final Map<String, Double> zipNumberPerZip = new HashMap<String, Double>();
         private final Map<String, Double> zipAvgScore = new HashMap<String, Double>();
@@ -422,6 +440,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         private double stdevAvgScoreZip = 0.0;
         private int currentYear;
 
+        // Ładuje statystyki TEMP1 i NYPD do pamięci, liczy statystyki globalne oraz zapisuje nagłówek TEMP2.
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             Configuration conf = context.getConfiguration();
@@ -432,6 +451,9 @@ public class Temp2MapReduce extends Configured implements Tool {
             context.write(NullWritable.get(), new Text(HEADER));
         }
 
+        // Dla każdego ZIP dopisuje do rekordów TEMP1 metryki TEMP2: odchylenia, indeks zagęszczenia, wiek budynku i statystyki crime.
+        // Wejście: wszystkie wiersze TEMP1 z danego ZIP.
+        // Wyjście: wiersze TEMP2 zachowujące kardynalność 1:1 względem TEMP1.
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             String zip = key.toString();
@@ -491,6 +513,7 @@ public class Temp2MapReduce extends Configured implements Tool {
             }
         }
 
+        // Wczytuje wyniki joba statystycznego TEMP1 i przygotowuje mapy ZIP/BORO używane przy finalnym wzbogacaniu.
         private void loadTemp1Stats(Configuration conf) throws IOException {
             String statsPath = conf.get("temp2.temp1.stats.path");
             if (statsPath == null) {
@@ -543,6 +566,7 @@ public class Temp2MapReduce extends Configured implements Tool {
             stdevPerBoro = populationStdev(new ArrayList<Double>(boroNumberPerBoro.values()));
         }
 
+        // Wczytuje agregaty NYPD po ZIP: count crime oraz dominant crime type.
         private void loadCrimeStats(Configuration conf) throws IOException {
             String crimePath = conf.get("temp2.crime.stats.path");
             if (crimePath == null) {
@@ -582,6 +606,7 @@ public class Temp2MapReduce extends Configured implements Tool {
             }
         }
 
+        // Liczy globalne średnie i odchylenia dla NUMBER_PER_ZIP, NUMBER_PER_BORO, AVG_SCORE_ZIP oraz liczby przestępstw.
         private void calculateGlobalStatistics() {
             List<Double> numberPerZipValues = new ArrayList<Double>(zipNumberPerZip.values());
             stdevPerZip = populationStdev(numberPerZipValues);
@@ -598,11 +623,13 @@ public class Temp2MapReduce extends Configured implements Tool {
             stdevCrimePerZip = populationStdev(crimeCountsAlignedToTemp1Zips);
         }
 
+        // Zwraca liczbę przestępstw dla ZIP; dla ZIP bez dopasowanych NYPD zwraca 0.
         private int getCrimeCount(String zip) {
             Integer count = crimeCountByZip.get(zip);
             return count == null ? 0 : count.intValue();
         }
 
+        // Liczy RESTAURANT_DENSITY_QUALITY_INDEX = NUMBER_PER_ZIP / AVG_SCORE_ZIP; dla braku danych lub zera zwraca pustą wartość.
         private String calculateRestaurantDensityQualityIndex(String numberPerZip, String avgScoreZip) {
             Double n = parseDouble(numberPerZip);
             Double avg = parseDouble(avgScoreZip);
@@ -612,6 +639,7 @@ public class Temp2MapReduce extends Configured implements Tool {
             return formatDouble(n.doubleValue() / avg.doubleValue());
         }
 
+        // Liczy BUILDING_AGE = currentYear - YEARBUILT tylko dla poprawnych lat z zakresu 1..currentYear.
         private String calculateBuildingAge(String yearbuilt, int currentYear) {
             Integer y = parseInt(onlyDigits(yearbuilt));
             if (y == null || y.intValue() <= 0 || y.intValue() > currentYear) {
@@ -620,6 +648,7 @@ public class Temp2MapReduce extends Configured implements Tool {
             return String.valueOf(currentYear - y.intValue());
         }
 
+        // Liczy pomocniczy risk score w TEMP2 jako suma z-score crime count i średniego score ZIP; finalnie jest przeliczany w TEMP3.
         private String calculateCrimeInspectionRisk(String zip, String avgScoreZip) {
             Double avgScore = parseDouble(avgScoreZip);
             if (avgScore == null) {
@@ -632,6 +661,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
+    // Zapisuje w konfiguracji indeksy kolumn TEMP1, akceptując nazwy z podkreśleniami i spacjami.
     private static void setTemp1Columns(Configuration conf, Map<String, Integer> h) {
         conf.setInt("temp1.idx.zipcode", firstExisting(h, 0, "ZIPCODE", "ZIP CODE"));
         conf.setInt("temp1.idx.camis", firstExisting(h, 1, "CAMIS"));
@@ -647,12 +677,16 @@ public class Temp2MapReduce extends Configured implements Tool {
         conf.setInt("temp1.idx.yearbuilt", firstExisting(h, 11, "YEARBUILT", "YEAR BUILT", "YEARBUIT"));
     }
 
+    // Zapisuje w konfiguracji indeksy kolumn wzbogaconego NYPD_ZIP.
     private static void setNypdZipColumns(Configuration conf, Map<String, Integer> h) {
         conf.setInt("nypd.idx.cmplnt_num", firstExisting(h, 0, "CMPLNT_NUM", "COMPLAINT NUMBER"));
         conf.setInt("nypd.idx.zipcode", firstExisting(h, 1, "ZIPCODE", "ZIP CODE", "ZIP", "MODZCTA"));
         conf.setInt("nypd.idx.ofns_desc", firstExisting(h, 2, "OFNS_DESC", "OFFENSE DESCRIPTION"));
     }
 
+    // Czyta pierwszy wiersz pliku CSV z HDFS i buduje mapę: kanoniczna nazwa kolumny -> indeks kolumny.
+    // Wejście: konfiguracja Hadoop oraz ścieżka HDFS do pliku CSV.
+    // Wyjście: mapa indeksów używana później do odpornego odczytu kolumn niezależnie od ich kolejności.
     private static Map<String, Integer> readHeaderIndex(Configuration conf, Path inputPath) throws IOException {
         FileSystem fs = inputPath.getFileSystem(conf);
         FSDataInputStream in = fs.open(inputPath);
@@ -673,6 +707,9 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
+    // Zwraca indeks pierwszej znalezionej kolumny spośród podanych możliwych nazw.
+    // Wejście: mapa nagłówków, indeks domyślny i lista akceptowanych nazw kolumn.
+    // Wyjście: indeks kolumny albo wartość domyślna, gdy kolumna nie została znaleziona.
     private static int firstExisting(Map<String, Integer> h, int defaultIndex, String... names) {
         for (String n : names) {
             Integer idx = h.get(canon(n));
@@ -683,6 +720,9 @@ public class Temp2MapReduce extends Configured implements Tool {
         return defaultIndex;
     }
 
+    // Wyszukuje pierwszy plik wynikowy part- w katalogu wyjściowym joba Hadoop.
+    // Wejście: FileSystem HDFS oraz katalog z wynikiem MapReduce.
+    // Wyjście: ścieżka do pliku part- lub null, jeżeli Hadoop nie utworzył pliku wynikowego.
     private static Path findFirstPartFile(FileSystem fs, Path dir) throws IOException {
         FileStatus[] statuses = fs.listStatus(dir);
         for (FileStatus st : statuses) {
@@ -693,6 +733,9 @@ public class Temp2MapReduce extends Configured implements Tool {
         return null;
     }
 
+    // Kopiuje plik w obrębie HDFS strumieniowo blokami bajtów.
+    // Wejście: FileSystem HDFS, ścieżka źródłowa i ścieżka docelowa.
+    // Wyjście: nowy plik docelowy, zwykle wersjonowany CSV albo plik _latest.csv.
     private static void copyHdfsFile(FileSystem fs, Path src, Path dst) throws IOException {
         FSDataInputStream in = fs.open(src);
         FSDataOutputStream out = fs.create(dst, true);
@@ -710,6 +753,9 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
+    // Parsuje pojedynczy wiersz CSV bez zewnętrznych bibliotek, z obsługą cudzysłowów, przecinków w polach i podwójnych cudzysłowów.
+    // Wejście: surowy wiersz tekstowy CSV.
+    // Wyjście: lista pól CSV w kolejności z pliku.
     private static List<String> parseCsvLine(String line) {
         List<String> result = new ArrayList<String>();
         StringBuilder cur = new StringBuilder();
@@ -734,6 +780,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         return result;
     }
 
+    // Sprawdza, czy sparsowany wiersz wygląda jak nagłówek CSV, porównując pierwszą kolumnę z oczekiwaną nazwą.
     private static boolean isCsvHeader(List<String> f, String expectedFirstColumn) {
         if (f == null || f.isEmpty()) {
             return false;
@@ -741,10 +788,12 @@ public class Temp2MapReduce extends Configured implements Tool {
         return canon(f.get(0)).equals(canon(expectedFirstColumn));
     }
 
+    // Bezpiecznie pobiera wartość pola z listy, zwracając pusty string, gdy indeks jest poza zakresem.
     private static String get(List<String> fields, int idx) {
         return idx >= 0 && idx < fields.size() ? fields.get(idx) : "";
     }
 
+    // Normalizuje podstawowo tekst: obsługuje null, usuwa białe znaki z końców i usuwa znak BOM.
     private static String clean(String s) {
         if (s == null) {
             return "";
@@ -752,14 +801,17 @@ public class Temp2MapReduce extends Configured implements Tool {
         return s.trim().replace('\uFEFF', ' ');
     }
 
+    // Zwraca oczyszczony tekst w uppercase z Locale.ROOT, aby nazwy były stabilne między systemami.
     private static String upper(String s) {
         return clean(s).toUpperCase(Locale.ROOT);
     }
 
+    // Sprawdza, czy wartość jest nullem albo pustym tekstem po trim().
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
     }
 
+    // Usuwa z tekstu wszystkie znaki poza cyframi, używane m.in. dla ZIP, BBL i roku budowy.
     private static String onlyDigits(String s) {
         if (s == null) {
             return "";
@@ -774,11 +826,13 @@ public class Temp2MapReduce extends Configured implements Tool {
         return out.toString();
     }
 
+    // Zwraca pierwsze pięć cyfr z tekstu, co standaryzuje ZIP/MODZCTA do postaci pięciocyfrowej.
     private static String firstFiveDigits(String s) {
         String d = onlyDigits(s);
         return d.length() >= 5 ? d.substring(0, 5) : d;
     }
 
+    // Łączy pola rekordów TEMP1 wewnętrznym separatorem US przed przekazaniem ich do reducera.
     private static String joinUS(String[] values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.length; i++) {
@@ -788,10 +842,12 @@ public class Temp2MapReduce extends Configured implements Tool {
         return sb.toString();
     }
 
+    // Rozdziela wewnętrzny rekord TEMP2/TEMP1 zapisany separatorem US.
     private static String[] splitUS(String line) {
         return line.split(US, -1);
     }
 
+    // Buduje poprawny wiersz CSV z tablicy wartości, używając csvEscape dla pól wymagających cudzysłowów.
     private static String toCsv(String[] values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.length; i++) {
@@ -801,6 +857,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         return sb.toString();
     }
 
+    // Escapuje pojedynczą wartość CSV: dodaje cudzysłowy i podwaja cudzysłowy wewnątrz pola, jeśli jest to potrzebne.
     private static String csvEscape(String s) {
         if (s == null) {
             s = "";
@@ -812,15 +869,18 @@ public class Temp2MapReduce extends Configured implements Tool {
         return "\"" + s.replace("\"", "\"\"") + "\"";
     }
 
+    // Usuwa znak pionowej kreski z pola pomocniczego, aby nie psuł wewnętrznego formatu |.
     private static String safePipe(String s) {
         return s == null ? "" : s.replace('|', ' ').trim();
     }
 
+    // Tworzy kanoniczną nazwę kolumny: uppercase, zamiana podkreśleń na spacje i redukcja wielu spacji.
     private static String canon(String s) {
         if (s == null) return "";
         return s.trim().toUpperCase(Locale.ROOT).replace('_', ' ').replaceAll("\\s+", " ");
     }
 
+    // Bezpiecznie konwertuje tekst na Double, zwracając null dla wartości pustych lub niepoprawnych.
     private static Double parseDouble(String s) {
         try {
             if (s == null || s.trim().isEmpty()) {
@@ -832,6 +892,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
+    // Bezpiecznie konwertuje tekst na Integer, zwracając null dla wartości pustych lub niepoprawnych.
     private static Integer parseInt(String s) {
         try {
             if (s == null || s.trim().isEmpty()) {
@@ -843,11 +904,13 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
+    // Pobiera wartość z mapy albo zwraca pusty string, jeśli klucz nie istnieje.
     private static String getOrEmpty(Map<String, String> map, String key) {
         String v = map.get(key);
         return v == null ? "" : v;
     }
 
+    // Liczy średnią arytmetyczną z listy wartości liczbowych; dla pustej listy zwraca 0.0.
     private static double mean(List<Double> values) {
         if (values == null || values.isEmpty()) {
             return 0.0;
@@ -861,6 +924,9 @@ public class Temp2MapReduce extends Configured implements Tool {
         return sum / values.size();
     }
 
+    // Liczy populacyjne odchylenie standardowe, czyli sqrt(sum((x-mean)^2)/n).
+    // Wejście: lista wartości liczbowych traktowana jako pełna populacja danych dostępnych w projekcie.
+    // Wyjście: odchylenie standardowe populacyjne; dla pustej listy 0.0.
     private static double populationStdev(List<Double> values) {
         if (values == null || values.isEmpty()) {
             return 0.0;
@@ -874,14 +940,17 @@ public class Temp2MapReduce extends Configured implements Tool {
         return Math.sqrt(sumSq / values.size());
     }
 
+    // Formatuje Double do czterech miejsc po przecinku albo zwraca pustą wartość dla null.
     private static String formatNullableDouble(Double v) {
         return v == null ? "" : formatDouble(v.doubleValue());
     }
 
+    // Formatuje liczbę zmiennoprzecinkową do czterech miejsc po przecinku z separatorem kropki.
     private static String formatDouble(double v) {
         return String.format(Locale.US, "%.4f", v);
     }
 
+    // Wybiera najczęstszy typ przestępstwa; przy remisie wygrywa alfabetycznie pierwszy typ.
     private static String chooseDominantAlphabetically(Map<String, Integer> counts) {
         if (counts == null || counts.isEmpty()) {
             return "";
@@ -900,10 +969,12 @@ public class Temp2MapReduce extends Configured implements Tool {
         return best;
     }
 
+    // Zwraca bieżący rok systemowy używany do obliczenia wieku budynku.
     private static int getCurrentYear() {
         return Integer.parseInt(new SimpleDateFormat("yyyy").format(new Date()));
     }
 
+    // Zwraca największą wartość z listy indeksów, aby szybko sprawdzić minimalną wymaganą długość wiersza.
     private static int max(int... values) {
         int m = Integer.MIN_VALUE;
         for (int v : values) {

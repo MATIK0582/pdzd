@@ -28,38 +28,44 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-/**
- * NYPD -> ZIP/MODZCTA enrichment MapReduce job.
- *
- * Purpose:
- *   NYPD Complaint Data Historic does not contain a ZIPCODE column.
- *   This job assigns each NYPD complaint to a ZIP/MODZCTA area by checking
- *   whether the complaint point (Longitude, Latitude) falls inside a MODZCTA polygon.
- *
- * Default input:
- *   /datasets/static/NYPD.csv
- *   /datasets/static/MODZCTA.csv
- *
- * Default output:
- *   /datasets/results/nypd_zip_yyyyMMdd_HHmmss.csv
- *   /datasets/results/nypd_zip_latest.csv
- *
- * Output schema:
- *   CMPLNT_NUM,ZIPCODE,OFNS_DESC,BORO_NM,LATITUDE,LONGITUDE
- *
- * Hadoop: 3.3.5
- * Java:   8
- * External libraries: none
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public class NypdZipMapReduce extends Configured implements Tool {
 
     private static final String HEADER = "CMPLNT_NUM,ZIPCODE,OFNS_DESC,BORO_NM,LATITUDE,LONGITUDE";
 
+    // Punkt wejścia programu uruchamianego przez yarn jar.
+    // Wejście: argumenty CLI przekazane do klasy MapReduce.
+    // Wyjście: kod zakończenia procesu zwrócony przez ToolRunner.
     public static void main(String[] args) throws Exception {
         int exitCode = ToolRunner.run(new Configuration(), new NypdZipMapReduce(), args);
         System.exit(exitCode);
     }
 
+    // Steruje pełnym przebiegiem etapu MapReduce: odczytuje argumenty, konfiguruje zadania Hadoop, uruchamia je w kolejności oraz zapisuje pliki wynikowe.
+    // Wejście: ścieżki HDFS przekazane w argumentach lub wartości domyślne zapisane w kodzie.
+    // Wyjście: plik CSV z timestampem, plik _latest.csv oraz kod statusu 0/1/2/... zależny od powodzenia poszczególnych jobów.
     @Override
     public int run(String[] args) throws Exception {
         String nypdInput = args.length > 0 ? args[0] : "/datasets/static/NYPD.csv";
@@ -95,7 +101,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         job.setOutputKeyClass(NullWritable.class);
         job.setOutputValueClass(Text.class);
         job.setOutputFormatClass(TextOutputFormat.class);
-        job.setNumReduceTasks(1); // one CSV file and one header
+        job.setNumReduceTasks(1); 
 
         FileInputFormat.addInputPath(job, new Path(nypdInput));
         FileOutputFormat.setOutputPath(job, jobOut);
@@ -149,6 +155,9 @@ public class NypdZipMapReduce extends Configured implements Tool {
             NYPD_ROWS_WITH_ZIP
         }
 
+        // Pobiera indeksy kolumn NYPD oraz ładuje do pamięci poligony MODZCTA potrzebne do spatial joinu.
+        // Wejście: konfiguracja Hadoop z indeksami kolumn i ścieżką MODZCTA.
+        // Wyjście: lista ZipArea w pamięci mappera; brak poligonów kończy job błędem.
         @Override
         protected void setup(Context context) throws IOException {
             Configuration conf = context.getConfiguration();
@@ -169,6 +178,9 @@ public class NypdZipMapReduce extends Configured implements Tool {
             }
         }
 
+        // Przypisuje pojedynczy rekord NYPD do ZIP/MODZCTA metodą point-in-polygon.
+        // Wejście: surowy wiersz NYPD.csv z CMPLNT_NUM, OFNS_DESC, BORO_NM, LATITUDE i LONGITUDE.
+        // Wyjście: wiersz CSV CMPLNT_NUM,ZIPCODE,OFNS_DESC,BORO_NM,LATITUDE,LONGITUDE albo pominięcie rekordu z odpowiednim licznikiem.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -221,11 +233,13 @@ public class NypdZipMapReduce extends Configured implements Tool {
     }
 
     public static class SingleCsvReducer extends Reducer<NullWritable, Text, NullWritable, Text> {
+        // Zapisuje nagłówek pliku nypd_zip_latest.csv przed danymi.
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             context.write(NullWritable.get(), new Text(HEADER));
         }
 
+        // Przepisuje wszystkie rekordy NYPD z ZIP do jednego pliku CSV z jednym nagłówkiem.
         @Override
         protected void reduce(NullWritable key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             for (Text v : values) {
@@ -234,6 +248,9 @@ public class NypdZipMapReduce extends Configured implements Tool {
         }
     }
 
+    // Ładuje poligony MODZCTA z pliku CSV i zamienia je na obiekty ZipArea używane przez mapper.
+    // Wejście: konfiguracja Hadoop, ścieżka HDFS do MODZCTA.csv oraz opcjonalny kontekst do liczników.
+    // Wyjście: lista obszarów ZIP z geometrią Polygon/Ring/Point.
     private static List<ZipArea> loadZipAreas(Configuration conf, Path modzctaPath, Mapper.Context context) throws IOException {
         List<ZipArea> out = new ArrayList<ZipArea>();
         FileSystem fs = modzctaPath.getFileSystem(conf);
@@ -289,6 +306,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return out;
     }
 
+    // Przeszukuje listę obszarów ZIP i zwraca pierwszy ZIP, którego poligon zawiera punkt lat/lon.
     private static String findZip(double lat, double lon, List<ZipArea> areas) {
         for (ZipArea area : areas) {
             if (area.contains(lat, lon)) {
@@ -298,6 +316,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return "";
     }
 
+    // Rozpoznaje format geometrii MODZCTA i deleguje parsowanie do WKT albo GeoJSON.
     private static List<Polygon> parseGeometry(String geometry) {
         String g = clean(geometry);
         if (g.length() == 0) {
@@ -313,6 +332,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return new ArrayList<Polygon>();
     }
 
+    // Parsuje geometrię WKT typu POLYGON albo MULTIPOLYGON do listy obiektów Polygon.
     private static List<Polygon> parseWktGeometry(String wkt) {
         List<Polygon> polygons = new ArrayList<Polygon>();
         String u = wkt.toUpperCase(Locale.ROOT).trim();
@@ -338,6 +358,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return polygons;
     }
 
+    // Buduje obiekt Polygon z grup pierścieni WKT, ignorując pierścienie z mniej niż trzema punktami.
     private static Polygon polygonFromWktRingGroups(List<String> ringGroups) {
         List<Ring> rings = new ArrayList<Ring>();
         for (String rg : ringGroups) {
@@ -350,6 +371,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return rings.isEmpty() ? null : new Polygon(rings);
     }
 
+    // Parsuje pojedynczy pierścień WKT, zamieniając pary lon lat na punkty Point.
     private static Ring parseWktRing(String ringBody) {
         List<Point> points = new ArrayList<Point>();
         String[] pairs = ringBody.split(",");
@@ -366,6 +388,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return new Ring(points);
     }
 
+    // Parsuje geometrię GeoJSON typu Polygon albo MultiPolygon do listy obiektów Polygon.
     private static List<Polygon> parseGeoJsonGeometry(String json) {
         List<Polygon> polygons = new ArrayList<Polygon>();
         String upper = json.toUpperCase(Locale.ROOT);
@@ -403,6 +426,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return polygons;
     }
 
+    // Buduje Polygon z listy pierścieni zapisanych w strukturze GeoJSON.
     private static Polygon polygonFromGeoJsonRingGroups(List<String> ringGroups) {
         List<Ring> rings = new ArrayList<Ring>();
         for (String rg : ringGroups) {
@@ -414,6 +438,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return rings.isEmpty() ? null : new Polygon(rings);
     }
 
+    // Parsuje pojedynczy pierścień GeoJSON, zamieniając pary [lon, lat] na punkty.
     private static Ring parseGeoJsonRing(String ringJson) {
         List<Point> points = new ArrayList<Point>();
         String body = stripOuterSquare(ringJson);
@@ -432,6 +457,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return new Ring(points);
     }
 
+    // Wydziela bezpośrednie grupy nawiasów okrągłych z tekstu, bez wchodzenia w głębsze poziomy.
     private static List<String> directParenGroups(String s) {
         List<String> groups = new ArrayList<String>();
         int depth = 0;
@@ -454,6 +480,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return groups;
     }
 
+    // Wydziela bezpośrednie grupy nawiasów kwadratowych z tekstu GeoJSON.
     private static List<String> directSquareGroups(String s) {
         List<String> groups = new ArrayList<String>();
         int depth = 0;
@@ -476,6 +503,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return groups;
     }
 
+    // Usuwa zewnętrzne nawiasy okrągłe tylko wtedy, gdy obejmują całe wyrażenie.
     private static String stripOuterParens(String s) {
         String x = clean(s);
         if (x.startsWith("(") && x.endsWith(")") && enclosesWholeExpression(x, '(', ')')) {
@@ -484,6 +512,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return x;
     }
 
+    // Usuwa zewnętrzne nawiasy kwadratowe tylko wtedy, gdy obejmują całe wyrażenie.
     private static String stripOuterSquare(String s) {
         String x = clean(s);
         if (x.startsWith("[") && x.endsWith("]") && enclosesWholeExpression(x, '[', ']')) {
@@ -492,6 +521,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return x;
     }
 
+    // Sprawdza, czy para nawiasów obejmuje całe wyrażenie, co chroni parser geometrii przed błędnym przycinaniem.
     private static boolean enclosesWholeExpression(String s, char open, char close) {
         int depth = 0;
         for (int i = 0; i < s.length(); i++) {
@@ -511,6 +541,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
     private static class Point {
         final double lat;
         final double lon;
+        // Tworzy punkt geograficzny przechowujący latitude i longitude.
         Point(double lat, double lon) {
             this.lat = lat;
             this.lon = lon;
@@ -524,6 +555,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         final double minLon;
         final double maxLon;
 
+        // Tworzy pierścień poligonu i wylicza jego bounding box przyspieszający test point-in-polygon.
         Ring(List<Point> points) {
             this.points = points;
             double a = Double.POSITIVE_INFINITY;
@@ -542,10 +574,12 @@ public class NypdZipMapReduce extends Configured implements Tool {
             this.maxLon = d;
         }
 
+        // Szybko sprawdza bounding box pierścienia przed kosztowniejszym testem przecięcia promienia.
         boolean mayContain(double lat, double lon) {
             return lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon;
         }
 
+        // Sprawdza, czy punkt leży wewnątrz pierścienia metodą ray casting.
         boolean contains(double lat, double lon) {
             if (!mayContain(lat, lon)) {
                 return false;
@@ -572,6 +606,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         final double minLon;
         final double maxLon;
 
+        // Tworzy poligon z pierścieni i wylicza bounding box całego poligonu.
         Polygon(List<Ring> rings) {
             this.rings = rings;
             double a = Double.POSITIVE_INFINITY;
@@ -590,15 +625,17 @@ public class NypdZipMapReduce extends Configured implements Tool {
             this.maxLon = d;
         }
 
+        // Szybko sprawdza bounding box poligonu przed analizą pierścieni.
         boolean mayContain(double lat, double lon) {
             return lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon;
         }
 
+        // Sprawdza, czy punkt leży w poligonie: pierwszy pierścień jest zewnętrzny, kolejne są dziurami.
         boolean contains(double lat, double lon) {
             if (!mayContain(lat, lon) || rings.isEmpty()) {
                 return false;
             }
-            // First ring is treated as the outer boundary. Additional rings are holes.
+            
             if (!rings.get(0).contains(lat, lon)) {
                 return false;
             }
@@ -619,6 +656,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         final double minLon;
         final double maxLon;
 
+        // Tworzy obszar ZIP/MODZCTA z listą poligonów i bounding boxem całego obszaru.
         ZipArea(String zip, List<Polygon> polygons) {
             this.zip = zip;
             this.polygons = polygons;
@@ -638,10 +676,12 @@ public class NypdZipMapReduce extends Configured implements Tool {
             this.maxLon = d;
         }
 
+        // Szybko sprawdza bounding box obszaru ZIP przed testowaniem wszystkich poligonów.
         boolean mayContain(double lat, double lon) {
             return lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon;
         }
 
+        // Sprawdza, czy punkt należy do któregokolwiek poligonu składającego się na ZIP/MODZCTA.
         boolean contains(double lat, double lon) {
             if (!mayContain(lat, lon)) {
                 return false;
@@ -655,6 +695,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         }
     }
 
+    // Zapisuje w konfiguracji indeksy kolumn NYPD potrzebnych do geokodowania ZIP.
     private static void setNypdColumns(Configuration conf, Map<String, Integer> h) {
         conf.setInt("nypd.idx.cmplnt_num", firstExisting(h, 0, "CMPLNT_NUM", "CMPLNT NUM"));
         conf.setInt("nypd.idx.boro_nm", firstExisting(h, 2, "BORO_NM", "BORO NM", "BOROUGH", "BORO"));
@@ -663,6 +704,9 @@ public class NypdZipMapReduce extends Configured implements Tool {
         conf.setInt("nypd.idx.longitude", firstExisting(h, 33, "LONGITUDE", "LON", "LNG"));
     }
 
+    // Czyta pierwszy wiersz pliku CSV z HDFS i buduje mapę: kanoniczna nazwa kolumny -> indeks kolumny.
+    // Wejście: konfiguracja Hadoop oraz ścieżka HDFS do pliku CSV.
+    // Wyjście: mapa indeksów używana później do odpornego odczytu kolumn niezależnie od ich kolejności.
     private static Map<String, Integer> readHeaderIndex(Configuration conf, Path inputPath) throws IOException {
         FileSystem fs = inputPath.getFileSystem(conf);
         FSDataInputStream in = fs.open(inputPath);
@@ -683,6 +727,9 @@ public class NypdZipMapReduce extends Configured implements Tool {
         }
     }
 
+    // Zwraca indeks pierwszej znalezionej kolumny spośród podanych możliwych nazw.
+    // Wejście: mapa nagłówków, indeks domyślny i lista akceptowanych nazw kolumn.
+    // Wyjście: indeks kolumny albo wartość domyślna, gdy kolumna nie została znaleziona.
     private static int firstExisting(Map<String, Integer> h, int defaultIndex, String... names) {
         for (String n : names) {
             Integer idx = h.get(canon(n));
@@ -693,6 +740,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return defaultIndex;
     }
 
+    // Awaryjnie wyszukuje pierwsze pole wyglądające jak ZIP, gdy nagłówek MODZCTA nie ma znanej nazwy.
     private static String findFirstZipLikeField(List<String> fields) {
         for (String f : fields) {
             String d = firstFiveDigits(clean(f));
@@ -703,6 +751,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return "";
     }
 
+    // Awaryjnie wyszukuje pierwsze pole wyglądające jak geometria WKT/GeoJSON.
     private static String findFirstGeometryField(List<String> fields) {
         for (String f : fields) {
             String u = clean(f).toUpperCase(Locale.ROOT);
@@ -713,6 +762,9 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return "";
     }
 
+    // Wyszukuje pierwszy plik wynikowy part- w katalogu wyjściowym joba Hadoop.
+    // Wejście: FileSystem HDFS oraz katalog z wynikiem MapReduce.
+    // Wyjście: ścieżka do pliku part- lub null, jeżeli Hadoop nie utworzył pliku wynikowego.
     private static Path findFirstPartFile(FileSystem fs, Path dir) throws IOException {
         FileStatus[] statuses = fs.listStatus(dir);
         for (FileStatus st : statuses) {
@@ -723,6 +775,9 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return null;
     }
 
+    // Kopiuje plik w obrębie HDFS strumieniowo blokami bajtów.
+    // Wejście: FileSystem HDFS, ścieżka źródłowa i ścieżka docelowa.
+    // Wyjście: nowy plik docelowy, zwykle wersjonowany CSV albo plik _latest.csv.
     private static void copyHdfsFile(FileSystem fs, Path src, Path dst) throws IOException {
         FSDataInputStream in = fs.open(src);
         FSDataOutputStream out = fs.create(dst, true);
@@ -740,6 +795,9 @@ public class NypdZipMapReduce extends Configured implements Tool {
         }
     }
 
+    // Parsuje pojedynczy wiersz CSV bez zewnętrznych bibliotek, z obsługą cudzysłowów, przecinków w polach i podwójnych cudzysłowów.
+    // Wejście: surowy wiersz tekstowy CSV.
+    // Wyjście: lista pól CSV w kolejności z pliku.
     private static List<String> parseCsvLine(String line) {
         List<String> result = new ArrayList<String>();
         StringBuilder cur = new StringBuilder();
@@ -764,6 +822,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return result;
     }
 
+    // Sprawdza, czy sparsowany wiersz wygląda jak nagłówek CSV, porównując pierwszą kolumnę z oczekiwaną nazwą.
     private static boolean isCsvHeader(List<String> f, String expectedFirstColumn) {
         if (f == null || f.isEmpty()) {
             return false;
@@ -771,10 +830,12 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return canon(f.get(0)).equals(canon(expectedFirstColumn));
     }
 
+    // Bezpiecznie pobiera wartość pola z listy, zwracając pusty string, gdy indeks jest poza zakresem.
     private static String get(List<String> fields, int idx) {
         return idx >= 0 && idx < fields.size() ? fields.get(idx) : "";
     }
 
+    // Normalizuje podstawowo tekst: obsługuje null, usuwa białe znaki z końców i usuwa znak BOM.
     private static String clean(String s) {
         if (s == null) {
             return "";
@@ -782,14 +843,17 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return s.trim().replace('\uFEFF', ' ');
     }
 
+    // Zwraca oczyszczony tekst w uppercase z Locale.ROOT, aby nazwy były stabilne między systemami.
     private static String upper(String s) {
         return clean(s).toUpperCase(Locale.ROOT);
     }
 
+    // Sprawdza, czy wartość jest nullem albo pustym tekstem po trim().
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
     }
 
+    // Usuwa z tekstu wszystkie znaki poza cyframi, używane m.in. dla ZIP, BBL i roku budowy.
     private static String onlyDigits(String s) {
         if (s == null) {
             return "";
@@ -804,11 +868,13 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return out.toString();
     }
 
+    // Zwraca pierwsze pięć cyfr z tekstu, co standaryzuje ZIP/MODZCTA do postaci pięciocyfrowej.
     private static String firstFiveDigits(String s) {
         String d = onlyDigits(s);
         return d.length() >= 5 ? d.substring(0, 5) : d;
     }
 
+    // Bezpiecznie konwertuje tekst na Double, zwracając null dla wartości pustych lub niepoprawnych.
     private static Double parseDouble(String s) {
         try {
             if (s == null || s.trim().isEmpty()) {
@@ -824,11 +890,13 @@ public class NypdZipMapReduce extends Configured implements Tool {
         }
     }
 
+    // Sprawdza, czy współrzędne mieszczą się w przybliżonym zakresie geograficznym Nowego Jorku.
     private static boolean isPlausibleNycCoordinate(double lat, double lon) {
-        // Broad NYC bounding box with small buffer.
+        
         return lat >= 40.30 && lat <= 41.10 && lon >= -74.60 && lon <= -73.40;
     }
 
+    // Buduje poprawny wiersz CSV z tablicy wartości, używając csvEscape dla pól wymagających cudzysłowów.
     private static String toCsv(String[] values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.length; i++) {
@@ -838,6 +906,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return sb.toString();
     }
 
+    // Escapuje pojedynczą wartość CSV: dodaje cudzysłowy i podwaja cudzysłowy wewnątrz pola, jeśli jest to potrzebne.
     private static String csvEscape(String s) {
         if (s == null) {
             s = "";
@@ -849,15 +918,18 @@ public class NypdZipMapReduce extends Configured implements Tool {
         return "\"" + s.replace("\"", "\"\"") + "\"";
     }
 
+    // Tworzy kanoniczną nazwę kolumny: uppercase, zamiana podkreśleń na spacje i redukcja wielu spacji.
     private static String canon(String s) {
         if (s == null) return "";
         return s.trim().toUpperCase(Locale.ROOT).replace('_', ' ').replaceAll("\\s+", " ");
     }
 
+    // Formatuje latitude/longitude z sześcioma miejscami po przecinku.
     private static String formatCoordinate(double v) {
         return String.format(Locale.US, "%.8f", v);
     }
 
+    // Zwraca największą wartość z listy indeksów, aby szybko sprawdzić minimalną wymaganą długość wiersza.
     private static int max(int... values) {
         int m = Integer.MIN_VALUE;
         for (int v : values) {

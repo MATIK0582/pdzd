@@ -33,31 +33,37 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-/**
- * TEMP1 MapReduce for the NYC restaurant project.
- *
- * Input:
- *   /datasets/dohmh/DOHMH_latest.csv
- *   /datasets/static/PLUTO.csv
- *
- * Output files:
- *   /datasets/results/temp1_yyyyMMdd_HHmmss.csv
- *   /datasets/results/temp1_latest.csv
- *
- * Hadoop: 3.3.5
- * Java:   8
- * External libraries: none
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public class Temp1MapReduce extends Configured implements Tool {
 
-    private static final String US = "\u001F"; // unit separator used internally
+    private static final String US = "\u001F"; 
     private static final String HEADER = "ZIPCODE,CAMIS,SCORE,CUISINE_DESCRIPTION,ADDRESS,BORO,NUMBER_PER_ZIP,NUMBER_PER_BORO,AVG_SCORE_ZIP,AVG_SCORE_BORO_CD,LANDUSE,YEARBUILT";
 
+    // Punkt wejścia programu uruchamianego przez yarn jar.
+    // Wejście: argumenty CLI przekazane do klasy MapReduce.
+    // Wyjście: kod zakończenia procesu zwrócony przez ToolRunner.
     public static void main(String[] args) throws Exception {
         int exitCode = ToolRunner.run(new Configuration(), new Temp1MapReduce(), args);
         System.exit(exitCode);
     }
 
+    // Steruje pełnym przebiegiem etapu MapReduce: odczytuje argumenty, konfiguruje zadania Hadoop, uruchamia je w kolejności oraz zapisuje pliki wynikowe.
+    // Wejście: ścieżki HDFS przekazane w argumentach lub wartości domyślne zapisane w kodzie.
+    // Wyjście: plik CSV z timestampem, plik _latest.csv oraz kod statusu 0/1/2/... zależny od powodzenia poszczególnych jobów.
     @Override
     public int run(String[] args) throws Exception {
         String dohmhInput = args.length > 0 ? args[0] : "/datasets/dohmh/DOHMH_latest.csv";
@@ -146,7 +152,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         finalJob.setOutputKeyClass(NullWritable.class);
         finalJob.setOutputValueClass(Text.class);
         finalJob.setOutputFormatClass(TextOutputFormat.class);
-        finalJob.setNumReduceTasks(1); // one output part, one header
+        finalJob.setNumReduceTasks(1); 
         FileOutputFormat.setOutputPath(finalJob, finalOut);
         if (!finalJob.waitForCompletion(true)) {
             return 4;
@@ -169,7 +175,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         fs.setReplication(versionedFile, (short) 3);
         fs.setReplication(latestFile, (short) 3);
 
-        // Clean only temporary working directories. Versioned and latest CSV files stay in /datasets/results.
+        
         fs.delete(workDir, true);
 
         System.out.println("TEMP1 versioned output: " + versionedFile);
@@ -178,7 +184,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return 0;
     }
 
-    /** Step 1: clean DOHMH and create one internal row per valid inspection row. */
+    
     public static class DohmhCleanMapper extends Mapper<LongWritable, Text, NullWritable, Text> {
         private int idxZip;
         private int idxCamis;
@@ -191,6 +197,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         private int idxBbl;
         private int maxIdx;
 
+        // Pobiera z konfiguracji indeksy kolumn DOHMH wyznaczone wcześniej na podstawie nagłówka CSV.
         @Override
         protected void setup(Context context) {
             Configuration conf = context.getConfiguration();
@@ -206,6 +213,9 @@ public class Temp1MapReduce extends Configured implements Tool {
             maxIdx = max(idxZip, idxCamis, idxScore, idxCuisine, idxBuilding, idxStreet, idxBoro, idxInspectionDate, idxBbl);
         }
 
+        // Czyści pojedynczy rekord DOHMH i tworzy wewnętrzny rekord TEMP1 używany w kolejnych jobach.
+        // Wejście: surowy wiersz DOHMH_latest.csv.
+        // Wyjście: wiersz z polami ZIPCODE, CAMIS, SCORE, CUISINE, ADDRESS, BORO, normalizedAddress, BBL oddzielonymi znakiem US; rekordy błędne są pomijane.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -235,7 +245,7 @@ public class Temp1MapReduce extends Configured implements Tool {
             String boro = clean(get(f, idxBoro));
             String bbl = normalizeBbl(clean(get(f, idxBbl)));
 
-            // Required preparation filter.
+            
             if (isBlank(zip) || isBlank(camis) || isBlank(scoreRaw) || isBlank(building) || isBlank(street) || isBlank(boro)) {
                 return;
             }
@@ -268,11 +278,14 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 2 mapper: create ZIP, BORO and BORO+CUISINE aggregation records. */
+    
     public static class StatsMapper extends Mapper<LongWritable, Text, Text, Text> {
         private final Text outKey = new Text();
         private final Text outValue = new Text();
 
+        // Z jednego oczyszczonego wiersza DOHMH tworzy rekordy pomocnicze do agregacji po ZIP, BORO oraz BORO+CUISINE.
+        // Wejście: wewnętrzny wiersz z DohmhCleanMapper.
+        // Wyjście: pary klucz-wartość ZIP|..., BORO|..., BOROCD|... dla reducerów statystycznych.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String[] f = splitUS(value.toString());
@@ -299,8 +312,11 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 2 reducer: count distinct CAMIS and calculate averages. */
+    
     public static class StatsReducer extends Reducer<Text, Text, Text, Text> {
+        // Liczy statystyki TEMP1: COUNT(DISTINCT CAMIS) po ZIP/BORO oraz średnie SCORE po ZIP i BORO+CUISINE.
+        // Wejście: grupa wartości dla jednego klucza ZIP, BORO albo BOROCD.
+        // Wyjście: pojedynczy rekord statystyczny zapisywany do katalogu 02_stats.
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             String k = key.toString();
@@ -346,7 +362,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 3 mapper: normalize PLUTO address and emit land use/year built candidates. */
+    
     public static class PlutoMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxAddress;
         private int idxPostcode;
@@ -357,6 +373,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         private final Text outKey = new Text();
         private final Text outValue = new Text();
 
+        // Pobiera z konfiguracji indeksy kolumn PLUTO: ADDRESS, POSTCODE, BBL, LANDUSE i YEARBUILT.
         @Override
         protected void setup(Context context) {
             Configuration conf = context.getConfiguration();
@@ -368,6 +385,9 @@ public class Temp1MapReduce extends Configured implements Tool {
             maxIdx = max(idxAddress, idxPostcode, idxBbl, idxLanduse, idxYearbuilt);
         }
 
+        // Normalizuje adresy PLUTO i emituje kandydatów do późniejszego joinu z DOHMH.
+        // Wejście: surowy wiersz PLUTO.csv.
+        // Wyjście: rekord PLUTO pod kluczem BBL oraz/lub ZIP+ADDRESS, zawierający LANDUSE i YEARBUILT.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -397,8 +417,8 @@ public class Temp1MapReduce extends Configured implements Tool {
             String yearbuilt = onlyDigits(clean(get(f, idxYearbuilt)));
             outValue.set(key.get() + "|" + safePipe(landuse) + "|" + safePipe(yearbuilt));
 
-            // Emit high-confidence BBL key and ZIP+address fallback key.
-            // This lets DOHMH rows with BBL join by parcel, while rows without BBL can still join by address.
+            
+            
             if (!isBlank(bbl)) {
                 outKey.set("B|" + bbl);
                 context.write(outKey, outValue);
@@ -410,8 +430,11 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 3 reducer: one PLUTO row per normalized address. */
+    
     public static class PlutoReducer extends Reducer<Text, Text, Text, Text> {
+        // Agreguje wiele rekordów PLUTO dla tego samego klucza joinu do jednej reprezentacji budynku/działki.
+        // Wejście: kandydaci PLUTO dla jednego BBL albo ZIP+ADDRESS.
+        // Wyjście: pierwszy niepusty LANDUSE według pozycji w pliku i najnowszy YEARBUILT.
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             String firstLanduse = "";
@@ -441,8 +464,9 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 4 mapper for cleaned DOHMH rows. */
+    
     public static class FinalDohmhMapper extends Mapper<LongWritable, Text, Text, Text> {
+        // Mapuje oczyszczone wiersze DOHMH na klucz joinu z PLUTO: najpierw BBL, a jeśli go brak, ZIP+ADDRESS.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String[] f = splitUS(value.toString());
@@ -460,8 +484,9 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 4 mapper for aggregated PLUTO rows. */
+    
     public static class FinalPlutoMapper extends Mapper<LongWritable, Text, Text, Text> {
+        // Przepisuje zagregowane rekordy PLUTO do formatu wejściowego finalnego reduce-side joinu.
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String line = value.toString();
@@ -478,18 +503,22 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    /** Step 4 reducer: reduce-side join on address plus lookup of previously calculated statistics. */
+    
     public static class FinalReducer extends Reducer<Text, Text, NullWritable, Text> {
         private final Map<String, ZipStat> zipStats = new HashMap<String, ZipStat>();
         private final Map<String, String> boroCounts = new HashMap<String, String>();
         private final Map<String, String> boroCuisineAvg = new HashMap<String, String>();
 
+        // Ładuje wcześniej wyliczone statystyki TEMP1 do map w pamięci oraz zapisuje nagłówek pliku wynikowego.
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             loadStats(context.getConfiguration());
             context.write(NullWritable.get(), new Text(HEADER));
         }
 
+        // Łączy rekordy DOHMH z dopasowanymi danymi PLUTO oraz dopisuje statystyki po ZIP/BORO/BORO+CUISINE.
+        // Wejście: dla jednego klucza joinu lista rekordów typu D (DOHMH) i P (PLUTO).
+        // Wyjście: finalne wiersze temp1 CSV w relacji 1:1 względem oczyszczonych rekordów DOHMH.
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             String landuse = "";
@@ -509,7 +538,7 @@ public class Temp1MapReduce extends Configured implements Tool {
                         yearbuilt = p[2];
                     }
                 } else if ("D".equals(p[0])) {
-                    // D + 8 cleaned columns; output uses the first 6 public columns plus normalized address internally
+                    
                     if (p.length >= 8) {
                         String[] row = new String[] { p[1], p[2], p[3], p[4], p[5], p[6], p[7] };
                         rows.add(row);
@@ -549,6 +578,7 @@ public class Temp1MapReduce extends Configured implements Tool {
             }
         }
 
+        // Wczytuje pliki part- ze statystykami TEMP1 i buduje mapy zipStats, boroCounts i boroCuisineAvg.
         private void loadStats(Configuration conf) throws IOException {
             String statsPath = conf.get("temp1.stats.path");
             if (statsPath == null) {
@@ -595,12 +625,14 @@ public class Temp1MapReduce extends Configured implements Tool {
     private static class ZipStat {
         final String count;
         final String avgScore;
+        // Tworzy prosty obiekt przechowujący liczbę restauracji w ZIP oraz średni SCORE dla ZIP.
         ZipStat(String count, String avgScore) {
             this.count = count;
             this.avgScore = avgScore;
         }
     }
 
+    // Zapisuje w konfiguracji Hadoop indeksy kolumn DOHMH znalezione w nagłówku wejściowego CSV.
     private static void setDohmhColumns(Configuration conf, Map<String, Integer> h) {
         conf.setInt("dohmh.idx.camis", firstExisting(h, 0, "CAMIS"));
         conf.setInt("dohmh.idx.boro", firstExisting(h, 2, "BORO", "BOROUGH"));
@@ -613,6 +645,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         conf.setInt("dohmh.idx.bbl", firstExisting(h, 24, "BBL"));
     }
 
+    // Zapisuje w konfiguracji Hadoop indeksy kolumn PLUTO znalezione w nagłówku wejściowego CSV.
     private static void setPlutoColumns(Configuration conf, Map<String, Integer> h) {
         conf.setInt("pluto.idx.address", firstExisting(h, 14, "ADDRESS"));
         conf.setInt("pluto.idx.postcode", firstExisting(h, 8, "POSTCODE", "ZIPCODE", "ZIP CODE"));
@@ -621,6 +654,9 @@ public class Temp1MapReduce extends Configured implements Tool {
         conf.setInt("pluto.idx.yearbuilt", firstExisting(h, 58, "YEARBUILT", "YEAR BUILT"));
     }
 
+    // Czyta pierwszy wiersz pliku CSV z HDFS i buduje mapę: kanoniczna nazwa kolumny -> indeks kolumny.
+    // Wejście: konfiguracja Hadoop oraz ścieżka HDFS do pliku CSV.
+    // Wyjście: mapa indeksów używana później do odpornego odczytu kolumn niezależnie od ich kolejności.
     private static Map<String, Integer> readHeaderIndex(Configuration conf, Path inputPath) throws IOException {
         FileSystem fs = inputPath.getFileSystem(conf);
         FSDataInputStream in = fs.open(inputPath);
@@ -641,6 +677,9 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
+    // Zwraca indeks pierwszej znalezionej kolumny spośród podanych możliwych nazw.
+    // Wejście: mapa nagłówków, indeks domyślny i lista akceptowanych nazw kolumn.
+    // Wyjście: indeks kolumny albo wartość domyślna, gdy kolumna nie została znaleziona.
     private static int firstExisting(Map<String, Integer> h, int defaultIndex, String... names) {
         for (String n : names) {
             Integer idx = h.get(canon(n));
@@ -651,6 +690,9 @@ public class Temp1MapReduce extends Configured implements Tool {
         return defaultIndex;
     }
 
+    // Wyszukuje pierwszy plik wynikowy part- w katalogu wyjściowym joba Hadoop.
+    // Wejście: FileSystem HDFS oraz katalog z wynikiem MapReduce.
+    // Wyjście: ścieżka do pliku part- lub null, jeżeli Hadoop nie utworzył pliku wynikowego.
     private static Path findFirstPartFile(FileSystem fs, Path dir) throws IOException {
         FileStatus[] statuses = fs.listStatus(dir);
         for (FileStatus st : statuses) {
@@ -661,6 +703,9 @@ public class Temp1MapReduce extends Configured implements Tool {
         return null;
     }
 
+    // Kopiuje plik w obrębie HDFS strumieniowo blokami bajtów.
+    // Wejście: FileSystem HDFS, ścieżka źródłowa i ścieżka docelowa.
+    // Wyjście: nowy plik docelowy, zwykle wersjonowany CSV albo plik _latest.csv.
     private static void copyHdfsFile(FileSystem fs, Path src, Path dst) throws IOException {
         FSDataInputStream in = fs.open(src);
         FSDataOutputStream out = fs.create(dst, true);
@@ -678,6 +723,9 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
+    // Parsuje pojedynczy wiersz CSV bez zewnętrznych bibliotek, z obsługą cudzysłowów, przecinków w polach i podwójnych cudzysłowów.
+    // Wejście: surowy wiersz tekstowy CSV.
+    // Wyjście: lista pól CSV w kolejności z pliku.
     private static List<String> parseCsvLine(String line) {
         List<String> result = new ArrayList<String>();
         StringBuilder cur = new StringBuilder();
@@ -702,6 +750,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return result;
     }
 
+    // Sprawdza, czy sparsowany wiersz wygląda jak nagłówek CSV, porównując pierwszą kolumnę z oczekiwaną nazwą.
     private static boolean isCsvHeader(List<String> f, String expectedFirstColumn) {
         if (f == null || f.isEmpty()) {
             return false;
@@ -709,10 +758,12 @@ public class Temp1MapReduce extends Configured implements Tool {
         return canon(f.get(0)).equals(canon(expectedFirstColumn));
     }
 
+    // Bezpiecznie pobiera wartość pola z listy, zwracając pusty string, gdy indeks jest poza zakresem.
     private static String get(List<String> fields, int idx) {
         return idx >= 0 && idx < fields.size() ? fields.get(idx) : "";
     }
 
+    // Normalizuje podstawowo tekst: obsługuje null, usuwa białe znaki z końców i usuwa znak BOM.
     private static String clean(String s) {
         if (s == null) {
             return "";
@@ -720,14 +771,17 @@ public class Temp1MapReduce extends Configured implements Tool {
         return s.trim().replace('\uFEFF', ' ');
     }
 
+    // Zwraca oczyszczony tekst w uppercase z Locale.ROOT, aby nazwy były stabilne między systemami.
     private static String upper(String s) {
         return clean(s).toUpperCase(Locale.ROOT);
     }
 
+    // Sprawdza, czy wartość jest nullem albo pustym tekstem po trim().
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
     }
 
+    // Rozpoznaje techniczne daty 1900, które oznaczają rekordy do usunięcia przed dalszą transformacją.
     private static boolean isInspectionDate1900(String s) {
         String x = clean(s).toUpperCase(Locale.ROOT);
         return x.equals("01/01/1900")
@@ -735,6 +789,7 @@ public class Temp1MapReduce extends Configured implements Tool {
                 || x.startsWith("1900-01-01");
     }
 
+    // Usuwa z tekstu wszystkie znaki poza cyframi, używane m.in. dla ZIP, BBL i roku budowy.
     private static String onlyDigits(String s) {
         if (s == null) {
             return "";
@@ -749,11 +804,13 @@ public class Temp1MapReduce extends Configured implements Tool {
         return out.toString();
     }
 
+    // Zwraca pierwsze pięć cyfr z tekstu, co standaryzuje ZIP/MODZCTA do postaci pięciocyfrowej.
     private static String firstFiveDigits(String s) {
         String d = onlyDigits(s);
         return d.length() >= 5 ? d.substring(0, 5) : d;
     }
 
+    // Czyści i waliduje BBL; zwraca pustą wartość dla placeholderów i niepełnych identyfikatorów działki.
     private static String normalizeBbl(String s) {
         String d = onlyDigits(s);
         if (d.length() != 10) {
@@ -771,7 +828,7 @@ public class Temp1MapReduce extends Configured implements Tool {
             return "";
         }
 
-        // Values like 1000000000 are placeholders, not real parcel BBLs.
+        
         boolean missingBlockAndLot = true;
         for (int i = 1; i < d.length(); i++) {
             if (d.charAt(i) != '0') {
@@ -782,6 +839,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return missingBlockAndLot ? "" : d;
     }
 
+    // Buduje klucz joinu DOHMH-PLUTO: preferuje BBL, a w razie braku używa ZIP+znormalizowanego adresu.
     private static String makeJoinKey(String zip, String bbl, String normalizedAddress) {
         String cleanBbl = normalizeBbl(bbl);
         if (!isBlank(cleanBbl)) {
@@ -795,6 +853,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return "A|" + cleanZip + "|" + normalizedAddress;
     }
 
+    // Usuwa sufiksy ST/ND/RD/TH z numerów ulic, np. 5TH -> 5, aby poprawić dopasowanie adresów.
     private static String stripOrdinalSuffix(String t) {
         if (t == null) {
             return "";
@@ -805,6 +864,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return t;
     }
 
+    // Standaryzuje adres: uppercase, usunięcie znaków specjalnych, redukcja spacji i zamiana pełnych nazw ulic na skróty.
     private static String normalizeAddress(String address) {
         String x = upper(address);
         x = x.replace('.', ' ');
@@ -828,6 +888,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return joinWithSpace(out);
     }
 
+    // Zamienia pojedynczy token adresu na skrót, np. STREET -> ST, AVENUE -> AVE, NORTH -> N.
     private static String abbreviateAddressToken(String t) {
         if ("SAINT".equals(t)) return "ST";
         if ("STREET".equals(t) || "STR".equals(t)) return "ST";
@@ -851,6 +912,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return t;
     }
 
+    // Łączy tokeny adresu pojedynczą spacją po zakończeniu normalizacji.
     private static String joinWithSpace(List<String> values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.size(); i++) {
@@ -860,6 +922,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return sb.toString();
     }
 
+    // Łączy pola wewnętrznym separatorem US, aby nie kolidować z przecinkami CSV.
     private static String joinUS(String[] values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.length; i++) {
@@ -869,10 +932,12 @@ public class Temp1MapReduce extends Configured implements Tool {
         return sb.toString();
     }
 
+    // Rozdziela wewnętrzny rekord zapisany separatorem US na tablicę pól.
     private static String[] splitUS(String line) {
         return line.split(US, -1);
     }
 
+    // Buduje poprawny wiersz CSV z tablicy wartości, używając csvEscape dla pól wymagających cudzysłowów.
     private static String toCsv(String[] values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.length; i++) {
@@ -882,6 +947,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return sb.toString();
     }
 
+    // Escapuje pojedynczą wartość CSV: dodaje cudzysłowy i podwaja cudzysłowy wewnątrz pola, jeśli jest to potrzebne.
     private static String csvEscape(String s) {
         if (s == null) {
             s = "";
@@ -893,15 +959,18 @@ public class Temp1MapReduce extends Configured implements Tool {
         return "\"" + s.replace("\"", "\"\"") + "\"";
     }
 
+    // Usuwa znak pionowej kreski z pola pomocniczego, aby nie psuł wewnętrznego formatu |.
     private static String safePipe(String s) {
         return s == null ? "" : s.replace('|', ' ').trim();
     }
 
+    // Tworzy kanoniczną nazwę kolumny: uppercase, zamiana podkreśleń na spacje i redukcja wielu spacji.
     private static String canon(String s) {
         if (s == null) return "";
         return s.trim().toUpperCase(Locale.ROOT).replace('_', ' ').replaceAll("\\s+", " ");
     }
 
+    // Bezpiecznie konwertuje tekst na Double, zwracając null dla wartości pustych lub niepoprawnych.
     private static Double parseDouble(String s) {
         try {
             if (s == null || s.trim().isEmpty()) {
@@ -913,6 +982,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
+    // Bezpiecznie konwertuje tekst na Integer, zwracając null dla wartości pustych lub niepoprawnych.
     private static Integer parseInt(String s) {
         try {
             if (s == null || s.trim().isEmpty()) {
@@ -924,6 +994,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
+    // Konwertuje offset z pliku na long; przy błędzie zwraca Long.MAX_VALUE, aby taki rekord nie wygrał jako pierwszy.
     private static long parseLongOrMax(String s) {
         try {
             return Long.parseLong(s);
@@ -932,6 +1003,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
+    // Formatuje SCORE jako liczbę całkowitą, jeżeli nie ma części ułamkowej, w innym razie jako liczbę z czterema miejscami.
     private static String formatScore(Double score) {
         if (score == null) {
             return "";
@@ -942,15 +1014,18 @@ public class Temp1MapReduce extends Configured implements Tool {
         return formatDouble(score.doubleValue());
     }
 
+    // Formatuje liczbę zmiennoprzecinkową do czterech miejsc po przecinku z separatorem kropki.
     private static String formatDouble(double v) {
         return String.format(Locale.US, "%.4f", v);
     }
 
+    // Pobiera wartość z mapy albo zwraca pusty string, gdy klucz nie istnieje.
     private static String getOrEmpty(Map<String, String> map, String key) {
         String v = map.get(key);
         return v == null ? "" : v;
     }
 
+    // Zwraca największą wartość z listy indeksów, aby szybko sprawdzić minimalną wymaganą długość wiersza.
     private static int max(int... values) {
         int m = Integer.MIN_VALUE;
         for (int v : values) {
