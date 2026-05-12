@@ -31,24 +31,24 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/**
+ * TEMP2 MapReduce for the NYC restaurant project.
+ *
+ * Input:
+ *   /datasets/results/temp1_latest.csv
+ *   /datasets/results/nypd_zip_latest.csv
+ *
+ * Output files:
+ *   /datasets/results/temp2_yyyyMMdd_HHmmss.csv
+ *   /datasets/results/temp2_latest.csv
+ *
+ * Hadoop: 3.3.5
+ * Java:   8
+ * External libraries: none
+ */
 public class Temp2MapReduce extends Configured implements Tool {
 
-    private static final String US = "\u001F"; 
+    private static final String US = "\u001F"; // unit separator used internally
     private static final String HEADER = "ZIPCODE,CAMIS,SCORE,CUISINE_DESCRIPTION,ADDRESS,BORO,NUMBER_PER_ZIP,STDEV_PER_ZIP,NUMBER_PER_BORO,STDEV_PER_BORO,AVG_SCORE_ZIP,AVG_SCORE_BORO_CD,RESTAURANT_DENSITY_QUALITY_INDEX,LANDUSE,BUILDING_AGE,YEARBUILT,AVG_CRIME_PER_ZIP,COUNT_CRIME_PER_ZIP,DOMINANT_CRIME_TYPE,CRIME_INSPECTION_RISK_SCORE";
 
     // Punkt wejścia programu uruchamianego przez yarn jar.
@@ -138,7 +138,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         finalJob.setOutputKeyClass(NullWritable.class);
         finalJob.setOutputValueClass(Text.class);
         finalJob.setOutputFormatClass(TextOutputFormat.class);
-        finalJob.setNumReduceTasks(1); 
+        finalJob.setNumReduceTasks(1); // one output part, one header
         FileInputFormat.addInputPath(finalJob, new Path(temp1Input));
         FileOutputFormat.setOutputPath(finalJob, finalOut);
         if (!finalJob.waitForCompletion(true)) {
@@ -170,7 +170,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         return 0;
     }
 
-    
+    /** Step 1 mapper: extract unique ZIP statistics and BORO statistics from TEMP1. */
     public static class Temp1StatsMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxZip;
         private int idxBoro;
@@ -230,7 +230,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 1 reducer: one record per ZIP and one record per BORO. */
     public static class Temp1StatsReducer extends Reducer<Text, Text, Text, Text> {
         // Redukuje powtarzające się rekordy TEMP1 do jednego rekordu statystycznego per ZIP albo per BORO.
         @Override
@@ -266,7 +266,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 2 mapper: emit one complaint/offense candidate by ZIP. */
     public static class NypdCrimeMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxCmplntNum;
         private int idxZip;
@@ -316,7 +316,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 2 reducer: COUNT(DISTINCT CMPLNT_NUM) and MODE(OFNS_DESC) per ZIP. */
     public static class NypdCrimeReducer extends Reducer<Text, Text, Text, Text> {
         // Liczy COUNT(DISTINCT CMPLNT_NUM) i dominujący typ przestępstwa dla każdego ZIP, z rozstrzyganiem remisów alfabetycznie.
         @Override
@@ -346,7 +346,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 3 mapper: parse TEMP1 rows and key them by ZIP. */
     public static class FinalTemp1Mapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxZip;
         private int idxCamis;
@@ -425,7 +425,7 @@ public class Temp2MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 3 reducer: enrich each TEMP1 row with TEMP2 metrics and preserve 1:1 row cardinality. */
     public static class FinalReducer extends Reducer<Text, Text, NullWritable, Text> {
         private final Map<String, Double> zipNumberPerZip = new HashMap<String, Double>();
         private final Map<String, Double> zipAvgScore = new HashMap<String, Double>();

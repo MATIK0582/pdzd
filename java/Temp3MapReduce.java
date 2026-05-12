@@ -28,23 +28,23 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/**
+ * TEMP3 MapReduce for the NYC restaurant project.
+ *
+ * Input:
+ *   /datasets/results/temp2_latest.csv
+ *
+ * Output files:
+ *   /datasets/results/temp3_yyyyMMdd_HHmmss.csv
+ *   /datasets/results/temp3_latest.csv
+ *
+ * Hadoop: 3.3.5
+ * Java:   8
+ * External libraries: none
+ */
 public class Temp3MapReduce extends Configured implements Tool {
 
-    private static final String US = "\u001F"; 
+    private static final String US = "\u001F"; // unit separator used internally
     private static final String HEADER = "CAMIS,BORO,ZIPCODE,ADDRESS,CUISINE_DESCRIPTION,YEARBUILT,LANDUSE,CRIME_INSPECTION_RISK_SCORE,BUILDING_AGE_SCORE,RESTAURANT_DENSITY_QUALITY_INDEX,CUISINE_RELATIVE_SCORE,DOMINANT_CRIME_TYPE";
 
     // Punkt wejścia programu uruchamianego przez yarn jar.
@@ -111,7 +111,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         finalJob.setOutputKeyClass(NullWritable.class);
         finalJob.setOutputValueClass(Text.class);
         finalJob.setOutputFormatClass(TextOutputFormat.class);
-        finalJob.setNumReduceTasks(1); 
+        finalJob.setNumReduceTasks(1); // one output part, one header
         FileInputFormat.addInputPath(finalJob, new Path(temp2Input));
         FileOutputFormat.setOutputPath(finalJob, finalOut);
         if (!finalJob.waitForCompletion(true)) {
@@ -143,7 +143,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         return 0;
     }
 
-    
+    /** Step 1 mapper: emit values needed for score and crime standard deviations. */
     public static class StatsMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxZip;
         private int idxScore;
@@ -211,7 +211,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 1 reducer: calculate population STDEV(SCORE) and keep one crime count per ZIP. */
     public static class StatsReducer extends Reducer<Text, Text, Text, Text> {
         // Liczy populacyjne odchylenia standardowe SCORE dla ZIP i BORO+CUISINE oraz zapisuje jedną wartość crime count dla ZIP.
         @Override
@@ -241,7 +241,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 2 mapper: pass TEMP2 rows to one reducer. */
     public static class FinalMapper extends Mapper<LongWritable, Text, Text, Text> {
         // Przekazuje wszystkie wiersze TEMP2 do jednego reducera, aby finalny plik miał jeden nagłówek i jeden part-file.
         @Override
@@ -258,7 +258,7 @@ public class Temp3MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 2 reducer: calculate final columns and preserve one output row per TEMP2 input row. */
     public static class FinalReducer extends Reducer<Text, Text, NullWritable, Text> {
         private final Map<String, Double> stdevScoreByZip = new HashMap<String, Double>();
         private final Map<String, Double> stdevScoreByBoroCuisine = new HashMap<String, Double>();
@@ -453,7 +453,7 @@ public class Temp3MapReduce extends Configured implements Tool {
                 return formatDouble(0.0);
             }
 
-            
+            // Standard z-score, consistent with NORM(value, mean, stdev) used in this pipeline.
             return formatDouble((score.doubleValue() - avgScoreBoroCd.doubleValue()) / stdev.doubleValue());
         }
     }

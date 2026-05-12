@@ -33,24 +33,24 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/**
+ * TEMP1 MapReduce for the NYC restaurant project.
+ *
+ * Input:
+ *   /datasets/dohmh/DOHMH_latest.csv
+ *   /datasets/static/PLUTO.csv
+ *
+ * Output files:
+ *   /datasets/results/temp1_yyyyMMdd_HHmmss.csv
+ *   /datasets/results/temp1_latest.csv
+ *
+ * Hadoop: 3.3.5
+ * Java:   8
+ * External libraries: none
+ */
 public class Temp1MapReduce extends Configured implements Tool {
 
-    private static final String US = "\u001F"; 
+    private static final String US = "\u001F"; // unit separator used internally
     private static final String HEADER = "ZIPCODE,CAMIS,SCORE,CUISINE_DESCRIPTION,ADDRESS,BORO,NUMBER_PER_ZIP,NUMBER_PER_BORO,AVG_SCORE_ZIP,AVG_SCORE_BORO_CD,LANDUSE,YEARBUILT";
 
     // Punkt wejścia programu uruchamianego przez yarn jar.
@@ -152,7 +152,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         finalJob.setOutputKeyClass(NullWritable.class);
         finalJob.setOutputValueClass(Text.class);
         finalJob.setOutputFormatClass(TextOutputFormat.class);
-        finalJob.setNumReduceTasks(1); 
+        finalJob.setNumReduceTasks(1); // one output part, one header
         FileOutputFormat.setOutputPath(finalJob, finalOut);
         if (!finalJob.waitForCompletion(true)) {
             return 4;
@@ -175,7 +175,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         fs.setReplication(versionedFile, (short) 3);
         fs.setReplication(latestFile, (short) 3);
 
-        
+        // Clean only temporary working directories. Versioned and latest CSV files stay in /datasets/results.
         fs.delete(workDir, true);
 
         System.out.println("TEMP1 versioned output: " + versionedFile);
@@ -184,7 +184,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         return 0;
     }
 
-    
+    /** Step 1: clean DOHMH and create one internal row per valid inspection row. */
     public static class DohmhCleanMapper extends Mapper<LongWritable, Text, NullWritable, Text> {
         private int idxZip;
         private int idxCamis;
@@ -245,7 +245,7 @@ public class Temp1MapReduce extends Configured implements Tool {
             String boro = clean(get(f, idxBoro));
             String bbl = normalizeBbl(clean(get(f, idxBbl)));
 
-            
+            // Required preparation filter.
             if (isBlank(zip) || isBlank(camis) || isBlank(scoreRaw) || isBlank(building) || isBlank(street) || isBlank(boro)) {
                 return;
             }
@@ -278,7 +278,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 2 mapper: create ZIP, BORO and BORO+CUISINE aggregation records. */
     public static class StatsMapper extends Mapper<LongWritable, Text, Text, Text> {
         private final Text outKey = new Text();
         private final Text outValue = new Text();
@@ -312,7 +312,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 2 reducer: count distinct CAMIS and calculate averages. */
     public static class StatsReducer extends Reducer<Text, Text, Text, Text> {
         // Liczy statystyki TEMP1: COUNT(DISTINCT CAMIS) po ZIP/BORO oraz średnie SCORE po ZIP i BORO+CUISINE.
         // Wejście: grupa wartości dla jednego klucza ZIP, BORO albo BOROCD.
@@ -362,7 +362,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 3 mapper: normalize PLUTO address and emit land use/year built candidates. */
     public static class PlutoMapper extends Mapper<LongWritable, Text, Text, Text> {
         private int idxAddress;
         private int idxPostcode;
@@ -417,8 +417,8 @@ public class Temp1MapReduce extends Configured implements Tool {
             String yearbuilt = onlyDigits(clean(get(f, idxYearbuilt)));
             outValue.set(key.get() + "|" + safePipe(landuse) + "|" + safePipe(yearbuilt));
 
-            
-            
+            // Emit high-confidence BBL key and ZIP+address fallback key.
+            // This lets DOHMH rows with BBL join by parcel, while rows without BBL can still join by address.
             if (!isBlank(bbl)) {
                 outKey.set("B|" + bbl);
                 context.write(outKey, outValue);
@@ -430,7 +430,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 3 reducer: one PLUTO row per normalized address. */
     public static class PlutoReducer extends Reducer<Text, Text, Text, Text> {
         // Agreguje wiele rekordów PLUTO dla tego samego klucza joinu do jednej reprezentacji budynku/działki.
         // Wejście: kandydaci PLUTO dla jednego BBL albo ZIP+ADDRESS.
@@ -464,7 +464,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 4 mapper for cleaned DOHMH rows. */
     public static class FinalDohmhMapper extends Mapper<LongWritable, Text, Text, Text> {
         // Mapuje oczyszczone wiersze DOHMH na klucz joinu z PLUTO: najpierw BBL, a jeśli go brak, ZIP+ADDRESS.
         @Override
@@ -484,7 +484,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 4 mapper for aggregated PLUTO rows. */
     public static class FinalPlutoMapper extends Mapper<LongWritable, Text, Text, Text> {
         // Przepisuje zagregowane rekordy PLUTO do formatu wejściowego finalnego reduce-side joinu.
         @Override
@@ -503,7 +503,7 @@ public class Temp1MapReduce extends Configured implements Tool {
         }
     }
 
-    
+    /** Step 4 reducer: reduce-side join on address plus lookup of previously calculated statistics. */
     public static class FinalReducer extends Reducer<Text, Text, NullWritable, Text> {
         private final Map<String, ZipStat> zipStats = new HashMap<String, ZipStat>();
         private final Map<String, String> boroCounts = new HashMap<String, String>();
@@ -538,7 +538,7 @@ public class Temp1MapReduce extends Configured implements Tool {
                         yearbuilt = p[2];
                     }
                 } else if ("D".equals(p[0])) {
-                    
+                    // D + 8 cleaned columns; output uses the first 6 public columns plus normalized address internally
                     if (p.length >= 8) {
                         String[] row = new String[] { p[1], p[2], p[3], p[4], p[5], p[6], p[7] };
                         rows.add(row);
@@ -828,7 +828,7 @@ public class Temp1MapReduce extends Configured implements Tool {
             return "";
         }
 
-        
+        // Values like 1000000000 are placeholders, not real parcel BBLs.
         boolean missingBlockAndLot = true;
         for (int i = 1; i < d.length(); i++) {
             if (d.charAt(i) != '0') {

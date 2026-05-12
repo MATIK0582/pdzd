@@ -28,29 +28,29 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/**
+ * NYPD -> ZIP/MODZCTA enrichment MapReduce job.
+ *
+ * Purpose:
+ *   NYPD Complaint Data Historic does not contain a ZIPCODE column.
+ *   This job assigns each NYPD complaint to a ZIP/MODZCTA area by checking
+ *   whether the complaint point (Longitude, Latitude) falls inside a MODZCTA polygon.
+ *
+ * Default input:
+ *   /datasets/static/NYPD.csv
+ *   /datasets/static/MODZCTA.csv
+ *
+ * Default output:
+ *   /datasets/results/nypd_zip_yyyyMMdd_HHmmss.csv
+ *   /datasets/results/nypd_zip_latest.csv
+ *
+ * Output schema:
+ *   CMPLNT_NUM,ZIPCODE,OFNS_DESC,BORO_NM,LATITUDE,LONGITUDE
+ *
+ * Hadoop: 3.3.5
+ * Java:   8
+ * External libraries: none
+ */
 public class NypdZipMapReduce extends Configured implements Tool {
 
     private static final String HEADER = "CMPLNT_NUM,ZIPCODE,OFNS_DESC,BORO_NM,LATITUDE,LONGITUDE";
@@ -101,7 +101,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
         job.setOutputKeyClass(NullWritable.class);
         job.setOutputValueClass(Text.class);
         job.setOutputFormatClass(TextOutputFormat.class);
-        job.setNumReduceTasks(1); 
+        job.setNumReduceTasks(1); // one CSV file and one header
 
         FileInputFormat.addInputPath(job, new Path(nypdInput));
         FileOutputFormat.setOutputPath(job, jobOut);
@@ -635,7 +635,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
             if (!mayContain(lat, lon) || rings.isEmpty()) {
                 return false;
             }
-            
+            // First ring is treated as the outer boundary. Additional rings are holes.
             if (!rings.get(0).contains(lat, lon)) {
                 return false;
             }
@@ -892,7 +892,7 @@ public class NypdZipMapReduce extends Configured implements Tool {
 
     // Sprawdza, czy współrzędne mieszczą się w przybliżonym zakresie geograficznym Nowego Jorku.
     private static boolean isPlausibleNycCoordinate(double lat, double lon) {
-        
+        // Broad NYC bounding box with small buffer.
         return lat >= 40.30 && lat <= 41.10 && lon >= -74.60 && lon <= -73.40;
     }
 
