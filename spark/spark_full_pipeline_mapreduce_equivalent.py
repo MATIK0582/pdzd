@@ -576,7 +576,7 @@ def create_temp3(temp2_path=None, results_dir=RESULTS_DIR, ts=RUN_TS):
 # 
 # Ustaw `RUN_FULL_PIPELINE = True`, aby wykonać wszystkie etapy.
 # %%
-RUN_FULL_PIPELINE = False
+RUN_FULL_PIPELINE = True
 
 if RUN_FULL_PIPELINE:
     temp1_df = create_temp1()
