@@ -20,6 +20,7 @@ from pyspark.sql import types as T
 from datetime import datetime
 import json
 import re
+import time
 
 spark = (
     SparkSession.builder
@@ -570,6 +571,38 @@ def create_temp3(temp2_path=None, results_dir=RESULTS_DIR, ts=RUN_TS):
 
     write_single_csv(temp3, f"{results_dir}/temp3_{ts}.csv", f"{results_dir}/temp3_latest.csv")
     return temp3
+
+def format_duration(seconds: float) -> str:
+    total_ms = int(round(seconds * 1000))
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    s = total_s % 60
+    m = (total_s // 60) % 60
+    h = total_s // 3600
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
+def run_timed_stage(stage_name: str, stage_function):
+    print(f"\n===== START ETAPU: {stage_name} =====")
+    start = time.perf_counter()
+    df = stage_function()
+    rows = df.count()
+    elapsed = time.perf_counter() - start
+    print(f"{stage_name} rows: {rows}")
+    print(f"Czas trwania etapu {stage_name}: {format_duration(elapsed)} ({elapsed:.3f} s)")
+    print(f"===== KONIEC ETAPU: {stage_name} =====\n")
+    return df, elapsed, rows
+
+
+def print_timing_summary(stage_results):
+    print("\n===== PODSUMOWANIE CZASÓW PIPELINE =====")
+    total = 0.0
+    for stage_name, elapsed, rows in stage_results:
+        total += elapsed
+        print(f"{stage_name}: {format_duration(elapsed)} ({elapsed:.3f} s), rows={rows}")
+    print(f"Łączny czas etapów: {format_duration(total)} ({total:.3f} s)")
+    print("========================================\n")
+
 # %% [markdown]
 # ## Uruchomienie całego pipeline
 # 
@@ -578,15 +611,25 @@ def create_temp3(temp2_path=None, results_dir=RESULTS_DIR, ts=RUN_TS):
 RUN_FULL_PIPELINE = True
 
 if RUN_FULL_PIPELINE:
-    temp1_df = create_temp1()
-    nypd_zip_df = create_nypd_zip()
-    temp2_df = create_temp2()
-    temp3_df = create_temp3()
+    pipeline_start = time.perf_counter()
+    stage_results = []
 
-    print("TEMP1:", temp1_df.count())
-    print("NYPD_ZIP:", nypd_zip_df.count())
-    print("TEMP2:", temp2_df.count())
-    print("TEMP3:", temp3_df.count())
+    temp1_df, elapsed, rows = run_timed_stage("TEMP1", create_temp1)
+    stage_results.append(("TEMP1", elapsed, rows))
+
+    nypd_zip_df, elapsed, rows = run_timed_stage("NYPD_ZIP", create_nypd_zip)
+    stage_results.append(("NYPD_ZIP", elapsed, rows))
+
+    temp2_df, elapsed, rows = run_timed_stage("TEMP2", create_temp2)
+    stage_results.append(("TEMP2", elapsed, rows))
+
+    temp3_df, elapsed, rows = run_timed_stage("TEMP3", create_temp3)
+    stage_results.append(("TEMP3", elapsed, rows))
+
+    print_timing_summary(stage_results)
+
+    pipeline_elapsed = time.perf_counter() - pipeline_start
+    print(f"Całkowity czas uruchomienia pipeline: {format_duration(pipeline_elapsed)} ({pipeline_elapsed:.3f} s)")
 else:
     print("RUN_FULL_PIPELINE = False. Ustaw True, aby uruchomić wszystkie etapy.")
 # %% [markdown]
