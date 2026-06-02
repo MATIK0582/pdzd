@@ -24,7 +24,6 @@ import re
 spark = (
     SparkSession.builder
     .appName("RestaurantSafetySparkPipeline")
-    .master("yarn")
     .config("spark.sql.shuffle.partitions", "8")
     .getOrCreate()
 )
