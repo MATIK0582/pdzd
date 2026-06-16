@@ -8,7 +8,7 @@
 # - wejścia i wyjścia są w Unity Catalog Volume: `/Volumes/workspace/default/project_files`,
 # - nie używamy `spark.sparkContext`, `df.rdd`, `_jvm`, `_jsc` ani ręcznego scalania plików przez Hadoop FileSystem,
 # - wyniki Spark są zapisywane jako katalogi CSV, np. `temp3_latest.csv` jest katalogiem z plikami `part-*`,
-# - etap `NYPD_ZIP` zachowuje przypisanie ZIP przez point-in-polygon, ale używa Databricks-compatible Python UDF z indeksem przestrzennym.
+# - etap `NYPD_ZIP` zachowuje przypisanie ZIP przez point-in-polygon, ale używa Databricks-compatible Python UDF z indeksem przestrzennym i bez cache/persist.
 # 
 # Etapy:
 # 1. `TEMP1`: czyszczenie DOHMH, agregacje i połączenie z PLUTO.
@@ -471,15 +471,18 @@ def create_nypd_zip(nypd_path=NYPD_INPUT, modzcta_path=MODZCTA_INPUT, results_di
             F.round("LATITUDE", 6).alias("LATITUDE"),
             F.round("LONGITUDE", 6).alias("LONGITUDE")
         )
-        .cache()
     )
 
-    rows_before_write = nypd_zip.count()
-    print(f"NYPD_ZIP rows przed zapisem: {rows_before_write}")
-
+    # Databricks Free Edition działa na serverless compute.
+    # W tym trybie cache/persist może kończyć się błędem:
+    # [NOT_SUPPORTED_WITH_SERVERLESS] PERSIST TABLE is not supported on serverless compute.
+    # Dlatego nie używamy .cache(), .persist() ani .unpersist().
+    #
+    # Etap zapisuje wynik do volume, a następnie zwraca DataFrame odczytany z katalogu latest.
+    # Dzięki temu pomiar rows w run_timed_stage liczy już zapisany wynik,
+    # a nie uruchamia ponownie geometrii na źródłowym NYPD.
     write_csv_result(nypd_zip, "nypd_zip", results_dir, ts)
 
-    nypd_zip.unpersist()
     return read_csv(f"{results_dir}/nypd_zip_latest.csv")
 # %% [markdown]
 # ## Etap 3: TEMP2
